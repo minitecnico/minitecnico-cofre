@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CreditCard as CardIcon, Plus, Calendar, AlertTriangle, Trash2, Pencil } from 'lucide-react';
+import { CreditCard as CardIcon, Plus, Calendar, AlertTriangle, Trash2, Pencil, CheckCircle2, Wallet, Sparkles } from 'lucide-react';
 import { cardService } from '../services';
 import { formatCurrency, formatPercent, formatDate } from '../utils/format';
 import Modal from '../components/Modal';
@@ -147,8 +147,8 @@ function CardForm({ initial, onSaved, onCancel }) {
               key={c}
               type="button"
               onClick={() => setForm({ ...form, color: c })}
-              className={`w-11 h-11 border-2 transition-all ${
-                form.color === c ? 'border-ink-900 scale-110' : 'border-ink-300 hover:scale-105'
+              className={`w-11 h-11 rounded-xl transition-all duration-200 shadow-soft ${
+                form.color === c ? 'ring-2 ring-ink-900 ring-offset-2 scale-110' : 'hover:scale-105'
               }`}
               style={{ backgroundColor: c }}
               aria-label={`Cor ${c}`}
@@ -175,83 +175,169 @@ function CardForm({ initial, onSaved, onCancel }) {
   );
 }
 
-function CardItem({ summary, onEdit, onDelete, onSelect, selected }) {
-  const { card, available, currentBill, utilizationPercent, cycleEnd } = summary;
+function CardItem({ summary, onEdit, onDelete, onPayBill, onSelect, selected, payingId }) {
+  const {
+    card,
+    available,
+    openBill,
+    paidInCycle,
+    cardLimit,
+    utilizationPercent,
+    cycleEnd,
+    unpaidCount,
+    purchaseCount,
+  } = summary;
   const isHighUsage = utilizationPercent > 80;
+  const hasOpenBill = openBill > 0;
+  const isPaying = payingId === card.id;
 
   return (
     <div
-      className={`relative p-5 md:p-6 cursor-pointer transition-all border-2 border-ink-900 shadow-flat-sm md:shadow-flat ${
-        selected ? 'ring-4 ring-accent' : ''
+      className={`relative rounded-2xl shadow-soft-md hover:shadow-soft-lg transition-all duration-300 cursor-pointer overflow-hidden ${
+        selected ? 'ring-2 ring-accent ring-offset-2 ring-offset-ink-50' : ''
       }`}
-      style={{ backgroundColor: card.color, color: '#fff' }}
       onClick={() => onSelect(card.id)}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between mb-6 md:mb-8 gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-[10px] md:text-xs uppercase tracking-widest opacity-80">{card.brand}</p>
-          <h3 className="font-display text-xl md:text-2xl font-bold mt-1 truncate">{card.name}</h3>
+      {/* Fundo gradiente baseado na cor do cartão */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background: `linear-gradient(135deg, ${card.color} 0%, ${card.color}dd 60%, ${card.color}99 100%)`,
+        }}
+      />
+      {/* Brilho decorativo */}
+      <div className="absolute -top-12 -right-12 w-40 h-40 bg-white/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Conteúdo */}
+      <div className="relative p-5 md:p-6 text-white">
+        {/* Header: bandeira + nome + ícone */}
+        <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] md:text-xs uppercase tracking-widest opacity-80 font-bold">
+              {card.brand}
+            </p>
+            <h3 className="font-display text-xl md:text-2xl font-bold mt-1 truncate tracking-tight">
+              {card.name}
+            </h3>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-sm flex items-center justify-center flex-shrink-0">
+            <CardIcon className="w-5 h-5" />
+          </div>
         </div>
-        <CardIcon className="w-6 h-6 md:w-7 md:h-7 opacity-90 flex-shrink-0" />
-      </div>
 
-      {/* Número estilizado */}
-      <p className="font-mono text-base md:text-lg tracking-widest opacity-80 mb-5 md:mb-6">
-        •••• •••• •••• {card.last_digits || '----'}
-      </p>
+        {/* Número estilizado */}
+        <p className="font-mono text-sm md:text-base tracking-[0.3em] opacity-80 mb-5 md:mb-6">
+          •••• •••• •••• {card.last_digits || '----'}
+        </p>
 
-      {/* Métricas */}
-      <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        {/* Métricas principais */}
+        <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
-            <p className="text-[10px] uppercase tracking-widest opacity-70 mb-1">Fatura</p>
-            <p className="stat-number text-base md:text-xl break-all">{formatCurrency(currentBill)}</p>
+            <p className="text-[10px] uppercase tracking-widest opacity-70 mb-1 font-bold">Fatura aberta</p>
+            <p className="font-display font-bold text-lg md:text-xl break-all">
+              {formatCurrency(openBill)}
+            </p>
+            {unpaidCount > 0 && (
+              <p className="text-[10px] opacity-70 mt-0.5">
+                {unpaidCount} {unpaidCount === 1 ? 'compra' : 'compras'}
+              </p>
+            )}
           </div>
           <div>
-            <p className="text-[10px] uppercase tracking-widest opacity-70 mb-1">Disponível</p>
-            <p className="stat-number text-base md:text-xl break-all">{formatCurrency(available)}</p>
+            <p className="text-[10px] uppercase tracking-widest opacity-70 mb-1 font-bold">Disponível</p>
+            <p className="font-display font-bold text-lg md:text-xl break-all">
+              {formatCurrency(available)}
+            </p>
+            <p className="text-[10px] opacity-70 mt-0.5">
+              de {formatCurrency(cardLimit)}
+            </p>
           </div>
         </div>
 
         {/* Barra de uso */}
-        <div>
-          <div className="flex items-center justify-between text-xs opacity-80 mb-1">
-            <span>Uso do limite</span>
-            <span className="font-mono font-semibold">{formatPercent(utilizationPercent)}</span>
+        <div className="mb-3">
+          <div className="flex items-center justify-between text-xs opacity-80 mb-1.5">
+            <span className="font-medium">Uso do limite</span>
+            <span className="font-mono font-bold">{formatPercent(utilizationPercent)}</span>
           </div>
-          <div className="h-2 bg-black/30 overflow-hidden">
+          <div className="h-2 bg-black/30 rounded-full overflow-hidden">
             <div
-              className={`h-full transition-all ${isHighUsage ? 'bg-warn' : 'bg-accent'}`}
+              className={`h-full transition-all duration-500 rounded-full ${
+                isHighUsage ? 'bg-warn' : 'bg-accent'
+              }`}
               style={{ width: `${Math.min(utilizationPercent, 100)}%` }}
             />
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-[10px] md:text-xs opacity-80 pt-2">
-          <Calendar className="w-3 h-3 flex-shrink-0" />
+        {/* Indicador de fatura paga */}
+        {paidInCycle > 0 && (
+          <div className="flex items-center gap-2 text-[10px] md:text-xs opacity-80 mb-2">
+            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>{formatCurrency(paidInCycle)} já pagos neste ciclo</span>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 text-[10px] md:text-xs opacity-80">
+          <Calendar className="w-3.5 h-3.5 flex-shrink-0" />
           <span className="truncate">Fecha {formatDate(cycleEnd, 'long')}</span>
         </div>
+
+        {isHighUsage && (
+          <div className="mt-3 flex items-center gap-2 px-3 py-2 bg-warn text-ink-900 text-xs font-bold rounded-xl">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            <span>Limite quase no topo</span>
+          </div>
+        )}
+
+        {/* Botão "Pagar fatura" — destaque quando há fatura aberta */}
+        {hasOpenBill && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onPayBill(summary);
+            }}
+            disabled={isPaying}
+            className="mt-4 w-full px-4 py-2.5 min-h-[44px] bg-white text-ink-900 font-bold rounded-xl
+                       shadow-soft hover:shadow-soft-md active:scale-[0.98]
+                       transition-all duration-200 text-sm
+                       flex items-center justify-center gap-2
+                       disabled:opacity-60"
+          >
+            {isPaying ? (
+              <>Pagando…</>
+            ) : (
+              <>
+                <Wallet className="w-4 h-4" />
+                Pagar fatura ({formatCurrency(openBill)})
+              </>
+            )}
+          </button>
+        )}
+
+        {!hasOpenBill && purchaseCount > 0 && (
+          <div className="mt-4 flex items-center justify-center gap-2 px-4 py-2.5 bg-white/15 backdrop-blur-sm rounded-xl text-sm font-bold">
+            <Sparkles className="w-4 h-4" />
+            Fatura zerada
+          </div>
+        )}
       </div>
 
-      {isHighUsage && (
-        <div className="mt-4 flex items-center gap-2 px-3 py-2 bg-warn text-ink-900 text-xs font-semibold">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>Limite quase no topo</span>
-        </div>
-      )}
-
-      {/* Ações: sempre visíveis no mobile */}
-      <div className="absolute top-3 right-3 flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+      {/* Ações editar/excluir — sempre visíveis, posição clara */}
+      <div className="absolute top-3 right-3 flex gap-1.5 z-10">
         <button
           onClick={(e) => { e.stopPropagation(); onEdit(card); }}
-          className="w-9 h-9 bg-white/20 hover:bg-white/30 flex items-center justify-center"
+          className="w-9 h-9 rounded-lg bg-white/20 hover:bg-white/30 backdrop-blur-sm flex items-center justify-center text-white transition-all duration-200"
+          title="Editar cartão"
+          aria-label="Editar cartão"
         >
           <Pencil className="w-4 h-4" />
         </button>
         <button
-          onClick={(e) => { e.stopPropagation(); onDelete(card.id); }}
-          className="w-9 h-9 bg-white/20 hover:bg-negative flex items-center justify-center"
+          onClick={(e) => { e.stopPropagation(); onDelete(card); }}
+          className="w-9 h-9 rounded-lg bg-white/20 hover:bg-negative backdrop-blur-sm flex items-center justify-center text-white transition-all duration-200"
+          title="Excluir cartão"
+          aria-label="Excluir cartão"
         >
           <Trash2 className="w-4 h-4" />
         </button>
@@ -282,21 +368,40 @@ function CardHistory({ cardId }) {
   }
 
   return (
-    <div className="bg-white border-2 border-ink-900 shadow-flat-sm md:shadow-flat divide-y-2 divide-ink-100">
-      {history.map((t) => (
-        <div key={t.id} className="flex items-center justify-between gap-3 p-3 md:p-4">
-          <div className="min-w-0 flex-1">
-            <p className="font-medium text-sm md:text-base truncate">{t.description}</p>
-            <p className="text-xs text-ink-500 mt-0.5 truncate">
-              <span style={{ color: t.category?.color }}>{t.category?.name}</span>
-              {' · '}{formatDate(t.date, 'long')}
+    <div className="bg-white rounded-2xl shadow-soft border border-ink-200/80 divide-y divide-ink-100 overflow-hidden">
+      {history.map((t) => {
+        const isPaid = !!t.paid;
+        const isInstallment = t.installment_total > 1;
+        return (
+          <div key={t.id} className={`flex items-center justify-between gap-3 p-4 transition-colors hover:bg-ink-50 ${isPaid ? 'opacity-60' : ''}`}>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className={`font-medium text-sm md:text-base truncate ${isPaid ? 'line-through' : ''}`}>
+                  {t.description}
+                </p>
+                {isInstallment && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-ink-100 text-ink-700 rounded">
+                    {t.installment_number}/{t.installment_total}
+                  </span>
+                )}
+                {isPaid && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-positive text-white rounded">
+                    <CheckCircle2 className="w-3 h-3" strokeWidth={3} />
+                    Pago
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-ink-500 mt-0.5 truncate">
+                <span style={{ color: t.category?.color }} className="font-medium">{t.category?.name}</span>
+                {' · '}{formatDate(t.date, 'long')}
+              </p>
+            </div>
+            <p className={`font-mono font-bold whitespace-nowrap text-sm md:text-base ${isPaid ? 'text-ink-500 line-through' : 'text-negative'}`}>
+              − {formatCurrency(t.amount)}
             </p>
           </div>
-          <p className="font-mono font-semibold text-negative whitespace-nowrap text-sm md:text-base">
-            − {formatCurrency(t.amount)}
-          </p>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -306,6 +411,10 @@ export default function CardsPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+  const [payingId, setPayingId] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(null); // { card, openBill }
+  const [confirmingPay, setConfirmingPay] = useState(null); // { card, openBill, unpaidCount }
+  const [feedback, setFeedback] = useState(null); // { type, text }
   const { isOpen, open, close } = useDisclosure();
 
   async function load() {
@@ -324,11 +433,59 @@ export default function CardsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleDelete(id) {
-    if (!confirm('Remover este cartão? O histórico de transações será preservado.')) return;
-    await cardService.remove(id);
-    setSelectedId(null);
-    load();
+  // Auto-clear do feedback após 4s
+  useEffect(() => {
+    if (!feedback) return;
+    const t = setTimeout(() => setFeedback(null), 4500);
+    return () => clearTimeout(t);
+  }, [feedback]);
+
+  function requestDelete(cardSummary) {
+    setConfirmingDelete({
+      card: cardSummary.card,
+      openBill: cardSummary.openBill,
+      unpaidCount: cardSummary.unpaidCount,
+    });
+  }
+
+  async function confirmDelete() {
+    const id = confirmingDelete.card.id;
+    setConfirmingDelete(null);
+    try {
+      await cardService.remove(id);
+      if (selectedId === id) setSelectedId(null);
+      setFeedback({ type: 'success', text: 'Cartão removido. Histórico preservado.' });
+      load();
+    } catch (err) {
+      setFeedback({ type: 'error', text: 'Erro ao remover: ' + err.message });
+    }
+  }
+
+  function requestPayBill(cardSummary) {
+    setConfirmingPay({
+      card: cardSummary.card,
+      openBill: cardSummary.openBill,
+      unpaidCount: cardSummary.unpaidCount,
+    });
+  }
+
+  async function confirmPayBill() {
+    const cardId = confirmingPay.card.id;
+    const cardName = confirmingPay.card.name;
+    setConfirmingPay(null);
+    setPayingId(cardId);
+    try {
+      const count = await cardService.payBill(cardId);
+      setFeedback({
+        type: 'success',
+        text: `✓ Fatura do ${cardName} paga. ${count} ${count === 1 ? 'compra marcada' : 'compras marcadas'} como paga${count === 1 ? '' : 's'}.`,
+      });
+      load();
+    } catch (err) {
+      setFeedback({ type: 'error', text: 'Erro ao pagar fatura: ' + err.message });
+    } finally {
+      setPayingId(null);
+    }
   }
 
   return (
@@ -348,10 +505,29 @@ export default function CardsPage() {
         </button>
       </div>
 
+      {/* Feedback de ações (sucesso/erro) */}
+      {feedback && (
+        <div
+          className={`px-4 py-3 rounded-xl text-sm font-medium flex items-center justify-between gap-3 animate-fade-in ${
+            feedback.type === 'success'
+              ? 'bg-accent/30 text-ink-900 border border-accent'
+              : 'bg-red-50 text-negative border border-negative'
+          }`}
+        >
+          <span>{feedback.text}</span>
+          <button
+            onClick={() => setFeedback(null)}
+            className="text-xs underline opacity-70 hover:opacity-100 flex-shrink-0"
+          >
+            ok
+          </button>
+        </div>
+      )}
+
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-5">
-          {[...Array(2)].map((_, i) => (
-            <div key={i} className="h-56 md:h-64 bg-ink-100 animate-pulse" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="h-72 bg-ink-100 rounded-2xl animate-pulse" />
           ))}
         </div>
       ) : cards.length === 0 ? (
@@ -373,16 +549,18 @@ export default function CardsPage() {
                 key={summary.card.id}
                 summary={summary}
                 onEdit={(c) => { setEditing(c); open(); }}
-                onDelete={handleDelete}
+                onDelete={requestDelete}
+                onPayBill={requestPayBill}
                 onSelect={setSelectedId}
                 selected={selectedId === summary.card.id}
+                payingId={payingId}
               />
             ))}
           </div>
 
           {selectedId && (
             <div>
-              <h3 className="font-display text-xl md:text-2xl font-bold mb-3 md:mb-4">
+              <h3 className="font-display text-xl md:text-2xl font-bold mb-3 md:mb-4 tracking-tight">
                 Histórico de compras
               </h3>
               <CardHistory cardId={selectedId} />
@@ -391,12 +569,97 @@ export default function CardsPage() {
         </>
       )}
 
+      {/* Modal: novo / editar cartão */}
       <Modal isOpen={isOpen} onClose={close} title={editing ? 'Editar cartão' : 'Novo cartão'}>
         <CardForm
           initial={editing}
           onSaved={() => { close(); load(); }}
           onCancel={close}
         />
+      </Modal>
+
+      {/* Modal: confirmar exclusão */}
+      <Modal
+        isOpen={!!confirmingDelete}
+        onClose={() => setConfirmingDelete(null)}
+        title="Excluir cartão"
+      >
+        {confirmingDelete && (
+          <div className="space-y-4">
+            <div className="px-4 py-3 bg-red-50 border border-negative rounded-xl">
+              <p className="text-sm">
+                Tem certeza que deseja excluir o cartão{' '}
+                <strong className="font-bold">{confirmingDelete.card.name}</strong>?
+              </p>
+              {confirmingDelete.openBill > 0 && (
+                <p className="text-xs text-ink-700 mt-2">
+                  ⚠️ Há fatura aberta de <strong>{formatCurrency(confirmingDelete.openBill)}</strong> ({confirmingDelete.unpaidCount} {confirmingDelete.unpaidCount === 1 ? 'compra' : 'compras'} pendente{confirmingDelete.unpaidCount === 1 ? '' : 's'}).
+                </p>
+              )}
+              <p className="text-xs text-ink-700 mt-2">
+                ✓ <strong>Histórico preservado:</strong> as compras antigas continuam no app, só perdem o vínculo com o cartão.
+              </p>
+            </div>
+
+            <div className="flex flex-col-reverse sm:flex-row gap-3">
+              <button
+                onClick={() => setConfirmingDelete(null)}
+                className="btn-ghost"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex-1 px-5 py-3 min-h-[44px] bg-negative text-white font-bold rounded-xl shadow-soft-md hover:shadow-soft-lg active:scale-[0.98] transition-all duration-200"
+              >
+                Excluir cartão
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal: confirmar pagamento da fatura */}
+      <Modal
+        isOpen={!!confirmingPay}
+        onClose={() => setConfirmingPay(null)}
+        title="Pagar fatura"
+      >
+        {confirmingPay && (
+          <div className="space-y-4">
+            <div className="px-4 py-4 bg-accent/20 border border-accent rounded-xl">
+              <p className="text-sm">
+                Pagar a fatura aberta de <strong className="font-bold">{confirmingPay.card.name}</strong>?
+              </p>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-[10px] uppercase font-bold tracking-widest text-ink-600">Valor</span>
+                <span className="font-display font-bold text-2xl text-ink-900">
+                  {formatCurrency(confirmingPay.openBill)}
+                </span>
+              </div>
+              <p className="text-xs text-ink-700 mt-3">
+                Isso vai marcar as <strong>{confirmingPay.unpaidCount} {confirmingPay.unpaidCount === 1 ? 'compra' : 'compras'}</strong> do ciclo atual como pagas.
+                O limite disponível volta a crescer no cartão.
+              </p>
+            </div>
+
+            <div className="flex flex-col-reverse sm:flex-row gap-3">
+              <button
+                onClick={() => setConfirmingPay(null)}
+                className="btn-ghost"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmPayBill}
+                className="btn-accent flex-1"
+              >
+                <Wallet className="w-4 h-4" />
+                Confirmar pagamento
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

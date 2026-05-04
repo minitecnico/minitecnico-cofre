@@ -239,10 +239,18 @@ export const cardService = {
         const s = summary?.[0] || {};
         return {
           card,
-          available: Number(s.available || card.card_limit),
-          currentBill: Number(s.current_bill || 0),
+          // Limite total
+          cardLimit: Number(s.card_limit || card.card_limit || 0),
+          // Compras não pagas (ocupam limite)
+          openBill: Number(s.open_bill || 0),
+          // Compras já pagas no ciclo (referência)
+          paidInCycle: Number(s.paid_in_cycle || 0),
+          // Compatibilidade com nomes antigos
+          currentBill: Number(s.open_bill || 0),
           totalUsed: Number(s.total_used || 0),
+          available: Number(s.available || card.card_limit || 0),
           purchaseCount: Number(s.purchase_count || 0),
+          unpaidCount: Number(s.unpaid_count || 0),
           cycleStart: s.cycle_start,
           cycleEnd: s.cycle_end,
           utilizationPercent: Number(s.utilization_percent || 0),
@@ -310,6 +318,17 @@ export const cardService = {
       .limit(50);
     if (error) throw error;
     return data || [];
+  },
+
+  /**
+   * Paga a fatura inteira do ciclo atual: marca todas as compras não pagas
+   * do ciclo como pagas. O limite "volta" ao cartão.
+   * Retorna a quantidade de compras marcadas.
+   */
+  async payBill(cardId) {
+    const { data, error } = await supabase.rpc('pay_card_bill', { p_card_id: cardId });
+    if (error) throw error;
+    return data || 0;
   },
 };
 
