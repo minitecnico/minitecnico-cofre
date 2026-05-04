@@ -58,6 +58,38 @@ export const transactionService = {
     return data;
   },
 
+  /**
+   * Cria várias transações de uma vez (lançamento em massa).
+   * Mais eficiente que N chamadas separadas: 1 só request, transação atômica.
+   *
+   * Cada item do array deve ter: type, amount, description, date, category_id,
+   * e opcionalmente credit_card_id.
+   *
+   * Retorna a quantidade criada.
+   */
+  async createBatch(items) {
+    if (!items || items.length === 0) return { count: 0, transactions: [] };
+
+    const userId = await currentUserId();
+    const rows = items.map((item) => ({
+      user_id: userId,
+      type: item.type,
+      amount: item.amount,
+      description: item.description,
+      date: item.date,
+      category_id: item.category_id,
+      credit_card_id: item.credit_card_id || null,
+      paid: item.type === 'income', // receita já vem como recebida
+    }));
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert(rows)
+      .select(`*, category:categories(*), credit_card:credit_cards(*)`);
+    if (error) throw error;
+    return { count: data?.length || 0, transactions: data || [] };
+  },
+
   async update(id, payload) {
     const { data, error } = await supabase
       .from('transactions')

@@ -1,8 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, ArrowDownCircle, ArrowUpCircle, CreditCard, Repeat } from 'lucide-react';
 
-// No mobile: 5 ícones principais. "Mais" abre menu com Categorias.
-// Por enquanto o ícone "Mais" leva direto pra Recorrências (uso mais frequente).
 const links = [
   { to: '/', label: 'Início', icon: LayoutDashboard, end: true },
   { to: '/incomes', label: 'Receitas', icon: ArrowUpCircle },
@@ -11,17 +9,10 @@ const links = [
   { to: '/recurring', label: 'Recorr.', icon: Repeat },
 ];
 
-/**
- * BottomNav — barra de navegação fixa no rodapé.
- * Visível apenas em telas < md (mobile).
- *
- * Itens distribuídos uniformemente, com indicador visual no ativo.
- * Altura fixa de 64px + safe-area-inset (notch de iPhones).
- */
 export default function BottomNav() {
   return (
     <nav
-      className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-ink-900 border-t-2 border-ink-900 grid grid-cols-5"
+      className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-gradient-dark text-ink-50 grid grid-cols-5 shadow-soft-xl"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       {links.map(({ to, label, icon: Icon, end }) => (
@@ -30,15 +21,18 @@ export default function BottomNav() {
           to={to}
           end={end}
           className={({ isActive }) =>
-            `flex flex-col items-center justify-center gap-0.5 py-2.5 min-h-[56px] transition-colors ${
-              isActive ? 'text-accent' : 'text-ink-300 hover:text-ink-50'
+            `relative flex flex-col items-center justify-center gap-0.5 py-2.5 min-h-[58px] transition-all duration-200 ${
+              isActive ? 'text-accent' : 'text-ink-400 hover:text-white'
             }`
           }
         >
           {({ isActive }) => (
             <>
+              {isActive && (
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-accent rounded-full" />
+              )}
               <Icon className="w-5 h-5" strokeWidth={isActive ? 2.5 : 2} />
-              <span className={`text-[10px] uppercase tracking-wider ${isActive ? 'font-bold' : 'font-medium'}`}>
+              <span className={`text-[10px] tracking-wide ${isActive ? 'font-bold' : 'font-medium'}`}>
                 {label}
               </span>
             </>

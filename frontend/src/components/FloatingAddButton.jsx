@@ -1,22 +1,34 @@
+import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useDisclosure } from '../hooks/useDisclosure';
 import Modal from './Modal';
 import TransactionForm from './TransactionForm';
+import BatchTransactionForm from './BatchTransactionForm';
 
-/**
- * Botão flutuante global "Adicionar".
- * --------------------------------------------------------------
- * Mobile: posicionado 80px acima do bottom (acima do BottomNav)
- * Desktop: canto inferior direito padrão (24px)
- * Tamanho aumenta levemente em desktop para combinar com a sidebar.
- */
 export default function FloatingAddButton({ onAdded }) {
   const { isOpen, open, close } = useDisclosure();
+  const [mode, setMode] = useState('single'); // 'single' | 'batch'
+  const [batchType, setBatchType] = useState('expense'); // tipo do batch
+
+  function handleOpen() {
+    setMode('single');
+    open();
+  }
+
+  function handleClose() {
+    close();
+    setMode('single'); // reset pro próximo abrir
+  }
+
+  function switchToBatch(typeFromForm) {
+    setBatchType(typeFromForm || 'expense');
+    setMode('batch');
+  }
 
   return (
     <>
       <button
-        onClick={open}
+        onClick={handleOpen}
         className="fab group"
         aria-label="Adicionar transação"
       >
@@ -26,14 +38,28 @@ export default function FloatingAddButton({ onAdded }) {
         />
       </button>
 
-      <Modal isOpen={isOpen} onClose={close} title="Nova transação">
-        <TransactionForm
-          onSaved={() => {
-            close();
-            onAdded?.();
-          }}
-          onCancel={close}
-        />
+      <Modal
+        isOpen={isOpen}
+        onClose={handleClose}
+        title={mode === 'batch' ? `Lançamento em massa — ${batchType === 'income' ? 'Receitas' : 'Despesas'}` : 'Nova transação'}
+        size={mode === 'batch' ? 'lg' : 'md'}
+      >
+        {mode === 'single' ? (
+          <TransactionForm
+            onSaved={() => { handleClose(); onAdded?.(); }}
+            onCancel={handleClose}
+            onSwitchToBatch={switchToBatch}
+          />
+        ) : (
+          <BatchTransactionForm
+            type={batchType}
+            onSaved={(count) => {
+              handleClose();
+              onAdded?.(count);
+            }}
+            onCancel={handleClose}
+          />
+        )}
       </Modal>
     </>
   );

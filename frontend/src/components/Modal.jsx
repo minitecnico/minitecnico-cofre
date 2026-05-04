@@ -1,14 +1,6 @@
 import { useEffect } from 'react';
 import { X } from 'lucide-react';
 
-/**
- * Modal responsivo:
- *  - Mobile: ocupa 95% da altura, surge de baixo (bottom-sheet style)
- *  - Desktop: modal centralizado tradicional
- *
- * Fecha com ESC, clique fora, ou botão X.
- * Trava scroll do body enquanto aberto.
- */
 export default function Modal({ isOpen, onClose, title, children, size = 'md' }) {
   useEffect(() => {
     if (!isOpen) return;
@@ -34,27 +26,31 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
       className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4 animate-fade-in"
       onClick={onClose}
     >
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-ink-900/40 backdrop-blur-sm" />
+      {/* Backdrop com blur moderno */}
+      <div className="absolute inset-0 bg-ink-900/50 backdrop-blur-md" />
 
       {/* Conteúdo */}
       <div
-        className={`relative bg-white border-2 border-ink-900 shadow-flat w-full
+        className={`relative bg-gradient-card shadow-soft-xl w-full
                     max-h-[95vh] md:max-h-[90vh] overflow-y-auto
-                    ${sizes[size]} animate-slide-up`}
+                    rounded-t-3xl md:rounded-2xl
+                    ${sizes[size]} animate-slide-up
+                    border border-ink-200/80`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 bg-white flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b-2 border-ink-900">
-          <h2 className="font-display text-xl md:text-2xl font-bold truncate pr-4">{title}</h2>
+        <div className="sticky top-0 z-10 bg-gradient-card backdrop-blur-md flex items-center justify-between px-5 md:px-6 py-4 md:py-5 border-b border-ink-100">
+          <h2 className="font-display text-xl md:text-2xl font-bold truncate pr-4 tracking-tight">
+            {title}
+          </h2>
           <button
             onClick={onClose}
-            className="w-9 h-9 flex items-center justify-center hover:bg-ink-100 transition-colors flex-shrink-0"
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-ink-500 hover:text-ink-900 hover:bg-ink-100 transition-all duration-200 flex-shrink-0"
             aria-label="Fechar"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-4 md:p-6">{children}</div>
+        <div className="p-5 md:p-6">{children}</div>
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ import { useTransactions } from '../hooks/useTransactions';
 import TransactionList from '../components/TransactionList';
 import Modal from '../components/Modal';
 import TransactionForm from '../components/TransactionForm';
+import BatchTransactionForm from '../components/BatchTransactionForm';
 import MonthSelector from '../components/MonthSelector';
 import { useDisclosure } from '../hooks/useDisclosure';
 import { formatCurrency } from '../utils/format';
@@ -14,6 +15,7 @@ export default function TransactionListPage({ type = 'income' }) {
   const { label } = useMonth();
   const { isOpen, open, close } = useDisclosure();
   const [searchTerm, setSearchTerm] = useState('');
+  const [mode, setMode] = useState('single'); // 'single' | 'batch'
 
   const { items, total, loading, refresh, remove, togglePaid } = useTransactions({
     type,
@@ -153,15 +155,38 @@ export default function TransactionListPage({ type = 'income' }) {
       />
 
       {/* Modal nova transação */}
-      <Modal isOpen={isOpen} onClose={close} title={`Nova ${isIncome ? 'receita' : 'despesa'}`}>
-        <TransactionForm
-          defaultType={type}
-          onSaved={() => {
-            close();
-            refresh();
-          }}
-          onCancel={close}
-        />
+      <Modal
+        isOpen={isOpen}
+        onClose={() => { close(); setMode('single'); }}
+        title={
+          mode === 'batch'
+            ? `Lançamento em massa — ${isIncome ? 'Receitas' : 'Despesas'}`
+            : `Nova ${isIncome ? 'receita' : 'despesa'}`
+        }
+        size={mode === 'batch' ? 'lg' : 'md'}
+      >
+        {mode === 'single' ? (
+          <TransactionForm
+            defaultType={type}
+            onSaved={() => {
+              close();
+              setMode('single');
+              refresh();
+            }}
+            onCancel={() => { close(); setMode('single'); }}
+            onSwitchToBatch={() => setMode('batch')}
+          />
+        ) : (
+          <BatchTransactionForm
+            type={type}
+            onSaved={() => {
+              close();
+              setMode('single');
+              refresh();
+            }}
+            onCancel={() => { close(); setMode('single'); }}
+          />
+        )}
       </Modal>
     </div>
   );

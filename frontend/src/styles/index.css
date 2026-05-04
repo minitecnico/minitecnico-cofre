@@ -5,28 +5,26 @@
 @layer base {
   html {
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     -webkit-tap-highlight-color: transparent;
   }
 
   body {
-    background: #f7f7f5;
-    background-image: linear-gradient(
-        to right,
-        rgba(22, 22, 16, 0.04) 1px,
-        transparent 1px
-      ),
-      linear-gradient(to bottom, rgba(22, 22, 16, 0.04) 1px, transparent 1px);
-    background-size: 32px 32px;
+    /* Fundo com gradiente sutil em vez do grid quadriculado anterior */
+    background: linear-gradient(135deg, #fafafa 0%, #f4f4f5 50%, #fafafa 100%);
+    background-attachment: fixed;
     min-height: 100vh;
     min-height: 100dvh;
+    color: #18181b;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    letter-spacing: -0.011em;
   }
 
   ::selection {
-    background: #c4f542;
-    color: #161610;
+    background: #b8e94e;
+    color: #18181b;
   }
 
-  /* Inputs no iOS não dão zoom se font-size for >= 16px */
   input,
   select,
   textarea {
@@ -40,56 +38,84 @@
       font-size: inherit;
     }
   }
+
+  /* Tipografia mais "tight" e moderna */
+  h1, h2, h3, h4 {
+    letter-spacing: -0.025em;
+    font-weight: 700;
+  }
 }
 
 @layer components {
-  /* Card "neo-brutalista": borda sólida, sombra dura */
+  /* Card moderno: gradiente sutil + sombra suave + cantos arredondados */
   .card-flat {
-    @apply bg-white border-2 border-ink-900 shadow-flat-sm md:shadow-flat rounded-none transition-all;
+    @apply bg-gradient-card border border-ink-200/80 shadow-soft rounded-2xl transition-all duration-300;
   }
 
   @media (hover: hover) {
     .card-flat:hover {
-      @apply -translate-x-0.5 -translate-y-0.5;
-      box-shadow: 6px 6px 0 0 rgba(22, 22, 16, 1);
+      @apply shadow-soft-md border-ink-300/80;
+      transform: translateY(-1px);
     }
   }
 
-  /* Botões — altura mínima de 44px (padrão iOS/Android) */
+  /* Botão primário: gradiente escuro */
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 md:px-5 md:py-3 min-h-[44px] bg-ink-900 text-white font-semibold border-2 border-ink-900 shadow-flat-sm hover:bg-accent hover:text-ink-900 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all text-sm md:text-base;
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 md:px-6 md:py-3 min-h-[44px]
+           bg-gradient-dark text-white font-semibold rounded-xl
+           shadow-soft-md hover:shadow-soft-lg
+           active:scale-[0.98] transition-all duration-200 text-sm md:text-base;
+    letter-spacing: -0.01em;
   }
 
+  /* Botão accent (CTA verde-limão): gradiente vibrante */
   .btn-accent {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 md:px-5 md:py-3 min-h-[44px] bg-accent text-ink-900 font-semibold border-2 border-ink-900 shadow-flat-sm hover:bg-accent-dark active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all text-sm md:text-base;
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 md:px-6 md:py-3 min-h-[44px]
+           bg-gradient-accent text-ink-900 font-bold rounded-xl
+           shadow-soft-md hover:shadow-soft-lg
+           active:scale-[0.98] transition-all duration-200 text-sm md:text-base;
+    letter-spacing: -0.01em;
   }
 
+  /* Botão fantasma (secundário, "cancelar") */
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] text-ink-700 hover:bg-ink-100 transition-colors text-sm md:text-base;
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 min-h-[44px]
+           text-ink-600 hover:text-ink-900 hover:bg-ink-100 rounded-xl
+           transition-all duration-200 text-sm md:text-base font-medium;
   }
 
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-negative hover:bg-red-50 border-2 border-transparent hover:border-negative transition-colors;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 min-h-[40px]
+           text-negative hover:bg-red-50 rounded-xl
+           transition-all duration-200 font-medium;
   }
 
+  /* Input moderno: borda sutil, focus suave */
   .input-field {
-    @apply w-full px-4 py-3 min-h-[48px] bg-white border-2 border-ink-900 focus:outline-none focus:shadow-flat-sm focus:-translate-x-0.5 focus:-translate-y-0.5 transition-all font-body;
+    @apply w-full px-4 py-3 min-h-[48px]
+           bg-white border border-ink-200 rounded-xl
+           focus:outline-none focus:border-ink-900 focus:shadow-glow-accent
+           transition-all duration-200 font-body text-ink-900;
   }
 
   .label {
-    @apply block text-xs font-semibold uppercase tracking-wider text-ink-700 mb-2;
+    @apply block text-xs font-semibold text-ink-600 mb-2;
+    letter-spacing: -0.005em;
   }
 
+  /* Números monetários: tabular pra alinhar */
   .stat-number {
-    @apply font-mono font-semibold tabular-nums;
+    @apply font-display font-bold tabular-nums tracking-tight;
   }
 
-  /* Floating Action Button — note: 'group' é aplicado direto no JSX, não aqui */
+  /* FAB moderno */
   .fab {
-    @apply fixed z-40 w-14 h-14
-           bg-accent border-2 border-ink-900 shadow-flat flex items-center justify-center
-           hover:bg-accent-dark active:translate-x-1 active:translate-y-1 active:shadow-none
-           transition-all
+    @apply fixed z-40 w-14 h-14 md:w-16 md:h-16
+           bg-gradient-accent rounded-2xl
+           shadow-soft-lg hover:shadow-soft-xl
+           flex items-center justify-center
+           active:scale-95
+           transition-all duration-200
            right-4 md:right-6;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
   }
@@ -111,12 +137,17 @@
   .stagger > *:nth-child(4) { animation-delay: 0.2s; }
   .stagger > *:nth-child(5) { animation-delay: 0.25s; }
   .stagger > *:nth-child(6) { animation-delay: 0.3s; }
+
+  /* Glassmorphism leve para overlays */
+  .glass {
+    @apply bg-white/80 backdrop-blur-md border border-white/40;
+  }
 }
 
-/* Scrollbar customizada (apenas desktop) */
+/* Scrollbar customizada moderna */
 @media (min-width: 768px) {
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-track { background: #eeeeea; }
-  ::-webkit-scrollbar-thumb { background: #4f4f3e; border-radius: 0; }
-  ::-webkit-scrollbar-thumb:hover { background: #161610; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; border: 2px solid transparent; background-clip: padding-box; }
 }

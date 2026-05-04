@@ -62,21 +62,12 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4 md:space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 md:gap-4">
-        <div className="min-w-0">
-          <p className="text-[10px] md:text-xs uppercase tracking-widest text-ink-500 font-semibold">
-            Painel principal
-          </p>
-          <h1 className="font-display text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold mt-1 leading-tight">
-            Suas finanças em um relance
-          </h1>
-        </div>
-
+      {/* Botão de exportar (sem título — interface mais limpa) */}
+      <div className="flex justify-end">
         <button
           onClick={handleExport}
           disabled={exporting}
-          className="btn-primary disabled:opacity-60 self-start sm:self-end flex-shrink-0"
+          className="btn-primary disabled:opacity-60"
         >
           <Download className="w-4 h-4" />
           <span className="hidden sm:inline">{exporting ? 'Exportando…' : 'Exportar CSV'}</span>

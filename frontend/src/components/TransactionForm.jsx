@@ -14,7 +14,7 @@ import { useMonth } from '../context/MonthContext';
  * Recorrência e parcelamento são MUTUAMENTE EXCLUSIVOS — uma compra parcelada
  * já cria múltiplas transações; recorrente é um modelo separado.
  */
-export default function TransactionForm({ initial = null, onSaved, onCancel, defaultType = 'expense' }) {
+export default function TransactionForm({ initial = null, onSaved, onCancel, onSwitchToBatch, defaultType = 'expense' }) {
   const isEdit = !!initial;
   const { isCurrentMonth, startDate: monthStart, month: currentMonthString } = useMonth();
 
@@ -391,6 +391,17 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
                   : 'Adicionar transação'}
         </button>
       </div>
+
+      {/* Atalho para lançamento em massa — só em modo criação, e quando não está em modos especiais */}
+      {!isEdit && !isRecurring && installmentCount === 1 && onSwitchToBatch && (
+        <button
+          type="button"
+          onClick={() => onSwitchToBatch(type)}
+          className="w-full text-xs text-ink-500 hover:text-ink-900 underline decoration-2 decoration-accent underline-offset-4 pt-2"
+        >
+          + Quero lançar várias {type === 'income' ? 'receitas' : 'despesas'} de uma vez
+        </button>
+      )}
     </form>
   );
 }
