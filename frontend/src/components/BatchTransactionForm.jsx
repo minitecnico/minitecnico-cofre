@@ -1,36 +1,41 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, Layers, ChevronDown, ChevronUp } from 'lucide-react';
 import { categoryService, transactionService, cardService } from '../services';
-import { parseAmount, formatCurrency } from '../utils/format';
+import { parseAmount, formatCurrency, splitInstallmentAmount } from '../utils/format';
 import { useMonth } from '../context/MonthContext';
 
 /**
  * Lançamento em massa de transações.
  * --------------------------------------------------------------
  * Permite adicionar múltiplas linhas (despesas ou receitas) e salvar
- * todas de uma vez via createBatch.
+ * todas de uma vez.
+ *
+ * Suporta PARCELAMENTO por linha (apenas para despesas no cartão).
+ * Cada linha pode ser:
+ *   - À vista (1x): cria 1 transação no mês da data efetiva
+ *   - Parcelada (Nx): cria N transações em N meses, mesmo dia
  *
  * Comportamento "herdar e sobrescrever":
- *   - A 1ª linha define data e cartão padrão.
- *   - Linhas subsequentes herdam por padrão (não precisa preencher de novo).
- *   - Cada linha pode ser "expandida" pra sobrescrever data/cartão.
- *
- * Visual: linhas compactas (1 linha por despesa) com sumário ao lado.
+ *   - 1ª linha define data e cartão padrão
+ *   - Linhas subsequentes herdam por padrão
+ *   - Cada linha pode sobrescrever data/cartão/parcelas
  */
 
 function emptyItem(defaults = {}) {
   return {
-    id: crypto.randomUUID(), // só pro React reconhecer key (não vai pro banco)
+    id: crypto.randomUUID(),
     description: '',
     amount: '',
     categoryId: defaults.categoryId || '',
-    // overrides opcionais — se null, herda da config geral
     dateOverride: null,
-    paymentMethodOverride: null, // 'account' | 'card' | null (herda)
+    paymentMethodOverride: null,
     creditCardIdOverride: null,
+    installmentCount: 1, // 1 = à vista
     expanded: false,
   };
 }
+
+const INSTALLMENT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 24];
 
 export default function BatchTransactionForm({ type = 'expense', onSaved, onCancel }) {
   const isIncome = type === 'income';
@@ -38,15 +43,13 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
 
   const initialDate = isCurrentMonth ? new Date().toISOString().slice(0, 10) : monthStart;
 
-  // Configuração comum (aplicada a todas as linhas que não sobrescrevem)
+  // Configuração comum
   const [commonDate, setCommonDate] = useState(initialDate);
   const [commonPaymentMethod, setCommonPaymentMethod] = useState(isIncome ? 'account' : 'card');
   const [commonCreditCardId, setCommonCreditCardId] = useState('');
 
-  // Linhas
   const [items, setItems] = useState([emptyItem(), emptyItem()]);
 
-  // Dados auxiliares
   const [categories, setCategories] = useState([]);
   const [cards, setCards] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -59,17 +62,13 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
     }
   }, [type, isIncome]);
 
-  // Define categoria padrão na primeira carga
   useEffect(() => {
     if (categories.length === 0) return;
     setItems((prev) =>
-      prev.map((it) =>
-        it.categoryId ? it : { ...it, categoryId: categories[0].id }
-      )
+      prev.map((it) => (it.categoryId ? it : { ...it, categoryId: categories[0].id }))
     );
   }, [categories]);
 
-  // Auto-seleciona primeiro cartão (caso comum)
   useEffect(() => {
     if (cards.length > 0 && !commonCreditCardId) {
       setCommonCreditCardId(cards[0].card.id);
@@ -86,29 +85,31 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
   }
 
   function removeItem(id) {
-    if (items.length === 1) return; // sempre mantém pelo menos 1
+    if (items.length === 1) return;
     setItems((prev) => prev.filter((it) => it.id !== id));
   }
 
-  // Calcula total e quantidade de itens válidos (com descrição + valor)
+  // Calcula resumo: total e quantidade de transações que serão criadas
+  // (uma linha parcelada em 8x conta como 8 transações)
   const summary = useMemo(() => {
     let total = 0;
-    let validCount = 0;
+    let validLines = 0;
+    let totalTransactions = 0;
     for (const it of items) {
       const amt = parseAmount(it.amount);
       if (amt > 0 && it.description.trim()) {
         total += amt;
-        validCount++;
+        validLines++;
+        totalTransactions += it.installmentCount || 1;
       }
     }
-    return { total, validCount };
+    return { total, validLines, totalTransactions };
   }, [items]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
 
-    // Filtra só linhas válidas
     const validItems = items.filter(
       (it) => it.description.trim() && parseAmount(it.amount) > 0 && it.categoryId
     );
@@ -121,34 +122,65 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
     setSubmitting(true);
 
     try {
-      // Monta o payload final aplicando "herdar ou sobrescrever"
-      const payload = validItems.map((it) => {
+      // Separa linhas em 2 grupos:
+      //   - À vista (1x): vão em batch único (mais rápido)
+      //   - Parceladas (Nx): cada uma chama createInstallments separadamente
+      const oneTimeRows = [];
+      const installmentItems = [];
+
+      for (const it of validItems) {
         const date = it.dateOverride || commonDate;
         const method = it.paymentMethodOverride || commonPaymentMethod;
         const cardId = it.creditCardIdOverride
           || (method === 'card' && !it.paymentMethodOverride ? commonCreditCardId : null);
 
-        return {
+        // Validação: parcelamento exige cartão
+        if (it.installmentCount > 1 && !cardId) {
+          throw new Error(
+            `"${it.description}" está parcelada em ${it.installmentCount}x mas não tem cartão selecionado.`
+          );
+        }
+        if (!isIncome && method === 'card' && !cardId) {
+          throw new Error(`"${it.description}" exige cartão selecionado.`);
+        }
+
+        const baseData = {
           type,
-          amount: parseAmount(it.amount),
+          totalAmount: parseAmount(it.amount),
+          startDate: date,
           description: it.description.trim(),
-          date,
           category_id: it.categoryId,
           credit_card_id: !isIncome && method === 'card' ? cardId : null,
         };
-      });
 
-      // Validação extra para despesas no cartão
-      if (!isIncome) {
-        for (const p of payload) {
-          if (commonPaymentMethod === 'card' && !p.credit_card_id) {
-            throw new Error('Selecione um cartão para o lançamento em massa.');
-          }
+        if (it.installmentCount > 1) {
+          installmentItems.push({ ...baseData, installmentCount: it.installmentCount });
+        } else {
+          oneTimeRows.push({
+            type,
+            amount: parseAmount(it.amount),
+            description: it.description.trim(),
+            date,
+            category_id: it.categoryId,
+            credit_card_id: baseData.credit_card_id,
+          });
         }
       }
 
-      const { count } = await transactionService.createBatch(payload);
-      onSaved?.(count);
+      // Cria à vista em batch (1 só request)
+      let totalCreated = 0;
+      if (oneTimeRows.length > 0) {
+        const { count } = await transactionService.createBatch(oneTimeRows);
+        totalCreated += count;
+      }
+
+      // Cria parceladas individualmente (cada uma gera N transações)
+      for (const item of installmentItems) {
+        const result = await transactionService.createInstallments(item);
+        totalCreated += result.transactions.length;
+      }
+
+      onSaved?.(totalCreated);
     } catch (err) {
       setError(err.message || 'Erro ao salvar lançamentos');
     } finally {
@@ -159,16 +191,15 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
   return (
     <form onSubmit={handleSubmit} className="space-y-4 md:space-y-5">
       {/* Cabeçalho informativo */}
-      <div className="px-3 py-2 bg-accent/30 border-2 border-ink-900 text-xs md:text-sm">
+      <div className="px-3 py-2.5 bg-accent/20 rounded-xl text-xs md:text-sm">
         <Layers className="w-4 h-4 inline mr-1" />
         <strong>Lançamento em massa.</strong> Cadastre várias {isIncome ? 'receitas' : 'despesas'} de uma vez.
-        A data e {!isIncome && 'forma de pagamento e '}categoria são preenchidas uma vez no topo
-        — você pode sobrescrever em cada linha se precisar.
+        {!isIncome && ' Para parcelar uma compra, expanda a linha (▼).'}
       </div>
 
       {/* Configurações comuns */}
-      <div className="card-flat p-3 md:p-4 bg-ink-50 space-y-3">
-        <p className="text-[10px] uppercase font-semibold tracking-widest text-ink-700">
+      <div className="card-flat p-3 md:p-4 space-y-3">
+        <p className="text-[10px] uppercase font-bold tracking-widest text-ink-600">
           Aplicar a todas
         </p>
 
@@ -190,10 +221,10 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
                 <button
                   type="button"
                   onClick={() => setCommonPaymentMethod('account')}
-                  className={`flex-1 px-2 py-2 text-xs font-medium border-2 transition-all ${
+                  className={`flex-1 px-2 py-2 text-xs font-semibold rounded-lg transition-all duration-200 ${
                     commonPaymentMethod === 'account'
-                      ? 'bg-ink-900 text-white border-ink-900'
-                      : 'bg-white text-ink-700 border-ink-300 hover:border-ink-900'
+                      ? 'bg-gradient-dark text-white shadow-soft'
+                      : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
                   }`}
                 >
                   Conta
@@ -201,10 +232,10 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
                 <button
                   type="button"
                   onClick={() => setCommonPaymentMethod('card')}
-                  className={`flex-1 px-2 py-2 text-xs font-medium border-2 transition-all ${
+                  className={`flex-1 px-2 py-2 text-xs font-semibold rounded-lg transition-all duration-200 ${
                     commonPaymentMethod === 'card'
-                      ? 'bg-ink-900 text-white border-ink-900'
-                      : 'bg-white text-ink-700 border-ink-300 hover:border-ink-900'
+                      ? 'bg-gradient-dark text-white shadow-soft'
+                      : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
                   }`}
                 >
                   Cartão
@@ -233,7 +264,7 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
 
       {/* Linhas */}
       <div className="space-y-2">
-        <p className="text-[10px] uppercase font-semibold tracking-widest text-ink-700">
+        <p className="text-[10px] uppercase font-bold tracking-widest text-ink-600">
           {isIncome ? 'Receitas' : 'Despesas'} ({items.length})
         </p>
 
@@ -257,7 +288,7 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
         <button
           type="button"
           onClick={addItem}
-          className="w-full px-4 py-3 min-h-[44px] border-2 border-dashed border-ink-400 hover:border-ink-900 hover:bg-accent/20 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+          className="w-full px-4 py-3 min-h-[44px] border-2 border-dashed border-ink-300 hover:border-ink-900 hover:bg-accent/10 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 text-ink-600 hover:text-ink-900"
         >
           <Plus className="w-4 h-4" strokeWidth={2.5} />
           Adicionar outra {isIncome ? 'receita' : 'despesa'}
@@ -265,19 +296,22 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
       </div>
 
       {/* Resumo */}
-      {summary.validCount > 0 && (
-        <div className="px-4 py-3 bg-ink-900 text-ink-50 border-2 border-ink-900 flex items-center justify-between">
+      {summary.validLines > 0 && (
+        <div className="px-4 py-3 bg-gradient-dark text-ink-50 rounded-2xl shadow-soft-md flex items-center justify-between">
           <div>
             <p className="text-[10px] uppercase tracking-widest text-accent font-bold">
-              Total de {summary.validCount} {summary.validCount === 1 ? 'lançamento' : 'lançamentos'}
+              {summary.validLines} {summary.validLines === 1 ? 'lançamento' : 'lançamentos'}
+              {summary.totalTransactions !== summary.validLines && (
+                <span> · {summary.totalTransactions} transações</span>
+              )}
             </p>
-            <p className="font-mono text-2xl font-semibold mt-0.5">{formatCurrency(summary.total)}</p>
+            <p className="font-display font-bold text-2xl mt-0.5">{formatCurrency(summary.total)}</p>
           </div>
         </div>
       )}
 
       {error && (
-        <div className="px-4 py-3 bg-red-50 border-2 border-negative text-negative text-sm">
+        <div className="px-4 py-3 bg-red-50 border border-negative text-negative text-sm rounded-xl">
           {error}
         </div>
       )}
@@ -288,14 +322,14 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
         </button>
         <button
           type="submit"
-          disabled={submitting || summary.validCount === 0}
+          disabled={submitting || summary.validLines === 0}
           className="btn-accent flex-1 disabled:opacity-60"
         >
           {submitting
             ? 'Salvando…'
-            : summary.validCount === 0
+            : summary.validLines === 0
               ? 'Preencha pelo menos uma'
-              : `Salvar ${summary.validCount} ${summary.validCount === 1 ? (isIncome ? 'receita' : 'despesa') : (isIncome ? 'receitas' : 'despesas')}`}
+              : `Salvar ${summary.validLines} ${summary.validLines === 1 ? (isIncome ? 'receita' : 'despesa') : (isIncome ? 'receitas' : 'despesas')}`}
         </button>
       </div>
     </form>
@@ -303,8 +337,12 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
 }
 
 /**
- * Linha individual de uma transação no lançamento em massa.
- * Modo compacto por padrão; expande se o usuário quiser sobrescrever.
+ * Linha individual no lançamento em massa.
+ * Mostra dados básicos compactos + painel expansível com:
+ *   - Parcelas (apenas despesa no cartão)
+ *   - Data desta linha
+ *   - Forma de pagamento desta linha
+ *   - Cartão desta linha
  */
 function BatchItemRow({
   item,
@@ -324,7 +362,23 @@ function BatchItemRow({
   const effectiveCardId = item.creditCardIdOverride
     || (effectiveMethod === 'card' && !item.paymentMethodOverride ? commonCreditCardId : null);
 
-  const hasOverride = !!(item.dateOverride || item.paymentMethodOverride || item.creditCardIdOverride);
+  const isInstallment = item.installmentCount > 1;
+  const canShowInstallments = !isIncome && effectiveMethod === 'card';
+
+  const hasOverride = !!(
+    item.dateOverride ||
+    item.paymentMethodOverride ||
+    item.creditCardIdOverride ||
+    isInstallment
+  );
+
+  // Preview de parcelas
+  const installmentPreview = useMemo(() => {
+    const total = parseAmount(item.amount);
+    if (item.installmentCount < 2 || total <= 0) return null;
+    const parts = splitInstallmentAmount(total, item.installmentCount);
+    return parts[0];
+  }, [item.amount, item.installmentCount]);
 
   function toggleExpand() {
     onChange({ expanded: !item.expanded });
@@ -335,15 +389,18 @@ function BatchItemRow({
       dateOverride: null,
       paymentMethodOverride: null,
       creditCardIdOverride: null,
+      installmentCount: 1,
       expanded: false,
     });
   }
 
   return (
-    <div className={`border-2 ${item.expanded || hasOverride ? 'border-ink-900' : 'border-ink-200'} bg-white transition-colors`}>
-      {/* Linha principal compacta */}
-      <div className="flex items-stretch gap-2 p-2">
-        <div className="flex items-center justify-center w-7 text-xs font-mono font-semibold text-ink-500">
+    <div className={`rounded-xl bg-white transition-all duration-200 ${
+      hasOverride ? 'border-2 border-ink-900 shadow-soft' : 'border border-ink-200'
+    }`}>
+      {/* Linha principal */}
+      <div className="flex items-stretch gap-1 p-2">
+        <div className="flex items-center justify-center w-7 text-xs font-mono font-bold text-ink-500">
           {index + 1}
         </div>
 
@@ -351,8 +408,8 @@ function BatchItemRow({
           type="text"
           value={item.description}
           onChange={(e) => onChange({ description: e.target.value })}
-          placeholder="Descrição (ex: Aluguel)"
-          className="flex-1 min-w-0 px-2 py-2 bg-transparent border-0 focus:outline-none text-sm placeholder:text-ink-400"
+          placeholder="Descrição (ex: Tênis novo)"
+          className="flex-1 min-w-0 px-2 py-2 bg-transparent border-0 focus:outline-none text-sm placeholder:text-ink-400 rounded-lg"
           maxLength={100}
         />
 
@@ -364,14 +421,14 @@ function BatchItemRow({
             value={item.amount}
             onChange={(e) => onChange({ amount: e.target.value })}
             placeholder="0,00"
-            className="w-24 sm:w-28 pl-7 pr-2 py-2 bg-transparent border-0 focus:outline-none text-sm font-mono font-semibold text-right"
+            className="w-24 sm:w-28 pl-7 pr-2 py-2 bg-transparent border-0 focus:outline-none text-sm font-mono font-bold text-right rounded-lg"
           />
         </div>
 
         <select
           value={item.categoryId}
           onChange={(e) => onChange({ categoryId: e.target.value })}
-          className="w-28 sm:w-36 px-1.5 py-2 bg-transparent border-0 focus:outline-none text-xs cursor-pointer"
+          className="w-28 sm:w-36 px-1.5 py-2 bg-transparent border-0 focus:outline-none text-xs cursor-pointer rounded-lg"
           aria-label="Categoria"
         >
           {categories.map((c) => (
@@ -382,10 +439,10 @@ function BatchItemRow({
         <button
           type="button"
           onClick={toggleExpand}
-          className={`w-8 flex items-center justify-center transition-colors ${
-            hasOverride ? 'text-ink-900 bg-accent/30' : 'text-ink-400 hover:text-ink-900'
+          className={`w-9 rounded-lg flex items-center justify-center transition-all duration-200 ${
+            hasOverride ? 'text-ink-900 bg-accent/30' : 'text-ink-400 hover:text-ink-900 hover:bg-ink-100'
           }`}
-          title={hasOverride ? 'Personalizado — clique para ajustar' : 'Personalizar data/pagamento'}
+          title="Personalizar (parcelas, data, cartão)"
           aria-label="Personalizar"
         >
           {item.expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -395,7 +452,7 @@ function BatchItemRow({
           <button
             type="button"
             onClick={onRemove}
-            className="w-8 flex items-center justify-center text-ink-400 hover:text-negative hover:bg-red-50 transition-colors"
+            className="w-9 rounded-lg flex items-center justify-center text-ink-400 hover:text-negative hover:bg-red-50 transition-all duration-200"
             aria-label="Remover linha"
           >
             <Trash2 className="w-4 h-4" />
@@ -403,9 +460,15 @@ function BatchItemRow({
         )}
       </div>
 
-      {/* Resumo compacto quando há override (mas não está expandido) */}
+      {/* Resumo compacto quando há override mas não está expandido */}
       {!item.expanded && hasOverride && (
-        <div className="px-3 pb-2 text-[10px] text-ink-500 flex flex-wrap gap-x-3 gap-y-1">
+        <div className="px-3 pb-2 text-[10px] text-ink-500 flex flex-wrap gap-x-3 gap-y-1 font-medium">
+          {isInstallment && (
+            <span className="text-ink-900 font-bold">
+              📦 {item.installmentCount}x
+              {installmentPreview && ` de ${formatCurrency(installmentPreview)}`}
+            </span>
+          )}
           {item.dateOverride && (
             <span>📅 {new Date(item.dateOverride + 'T00:00:00').toLocaleDateString('pt-BR')}</span>
           )}
@@ -415,12 +478,40 @@ function BatchItemRow({
         </div>
       )}
 
-      {/* Painel expandido pra sobrescrever data/cartão */}
+      {/* Painel expandido */}
       {item.expanded && (
-        <div className="px-3 pb-3 pt-1 space-y-3 border-t-2 border-ink-100 bg-ink-50">
+        <div className="px-3 pb-3 pt-1 space-y-3 border-t border-ink-100 bg-ink-50/50 rounded-b-xl">
+          {/* Parcelas — primeira coisa (mais usado) */}
+          {canShowInstallments && (
+            <div>
+              <label className="label !mb-1 !text-[9px]">Parcelas</label>
+              <select
+                value={item.installmentCount}
+                onChange={(e) => onChange({ installmentCount: parseInt(e.target.value, 10) })}
+                className="input-field !min-h-[36px] !py-1.5 !text-xs"
+              >
+                <option value={1}>À vista</option>
+                {INSTALLMENT_OPTIONS.filter((n) => n > 1).map((n) => (
+                  <option key={n} value={n}>{n}x sem juros</option>
+                ))}
+              </select>
+              {installmentPreview && (
+                <p className="text-[10px] text-ink-600 mt-1.5">
+                  <strong>{item.installmentCount}x</strong> de{' '}
+                  <span className="font-mono font-bold text-ink-900">
+                    {formatCurrency(installmentPreview)}
+                  </span>
+                  <span className="text-ink-400"> · cria {item.installmentCount} transações</span>
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label !mb-1 !text-[9px]">Data desta linha</label>
+              <label className="label !mb-1 !text-[9px]">
+                {isInstallment ? 'Data da 1ª parcela' : 'Data desta linha'}
+              </label>
               <input
                 type="date"
                 value={item.dateOverride || effectiveDate}
@@ -431,7 +522,7 @@ function BatchItemRow({
               />
             </div>
 
-            {!isIncome && (
+            {!isIncome && !isInstallment && (
               <div>
                 <label className="label !mb-1 !text-[9px]">Pagamento desta linha</label>
                 <div className="flex gap-1">
@@ -443,10 +534,10 @@ function BatchItemRow({
                         creditCardIdOverride: null,
                       })
                     }
-                    className={`flex-1 px-2 py-1.5 text-[10px] font-medium border-2 transition-all ${
+                    className={`flex-1 px-2 py-1.5 text-[10px] font-semibold rounded-lg transition-all duration-200 ${
                       effectiveMethod === 'account'
-                        ? 'bg-ink-900 text-white border-ink-900'
-                        : 'bg-white text-ink-700 border-ink-300'
+                        ? 'bg-gradient-dark text-white'
+                        : 'bg-ink-100 text-ink-600'
                     }`}
                   >
                     Conta
@@ -454,10 +545,10 @@ function BatchItemRow({
                   <button
                     type="button"
                     onClick={() => onChange({ paymentMethodOverride: 'card' })}
-                    className={`flex-1 px-2 py-1.5 text-[10px] font-medium border-2 transition-all ${
+                    className={`flex-1 px-2 py-1.5 text-[10px] font-semibold rounded-lg transition-all duration-200 ${
                       effectiveMethod === 'card'
-                        ? 'bg-ink-900 text-white border-ink-900'
-                        : 'bg-white text-ink-700 border-ink-300'
+                        ? 'bg-gradient-dark text-white'
+                        : 'bg-ink-100 text-ink-600'
                     }`}
                   >
                     Cartão
@@ -492,7 +583,7 @@ function BatchItemRow({
             <button
               type="button"
               onClick={clearOverrides}
-              className="text-xs underline text-ink-500 hover:text-ink-900"
+              className="text-xs underline text-ink-500 hover:text-ink-900 font-medium"
             >
               Limpar personalização (voltar a usar configuração comum)
             </button>
