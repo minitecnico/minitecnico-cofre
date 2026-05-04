@@ -1,19 +1,10 @@
 import { useState } from 'react';
-import { Pencil, Trash2, CreditCard as CardIcon, Check, Repeat } from 'lucide-react';
+import { Pencil, Trash2, CreditCard as CardIcon, Check, Repeat, Layers } from 'lucide-react';
 import { formatCurrency, formatDate } from '../utils/format';
 import Modal from './Modal';
 import TransactionForm from './TransactionForm';
+import { transactionService } from '../services';
 
-/**
- * Lista de transações.
- * --------------------------------------------------------------
- * Despesas têm checkbox de "pago": clique alterna entre pendente/pago.
- * Quando paga: texto riscado, opacidade reduzida, ícone de check.
- * Receitas não têm checkbox (não faz sentido).
- *
- * Props:
- *   - onTogglePaid(id, currentPaid): callback ao clicar no checkbox
- */
 export default function TransactionList({
   items,
   loading,
@@ -23,6 +14,7 @@ export default function TransactionList({
   emptyMessage = 'Nenhuma transação encontrada',
 }) {
   const [editing, setEditing] = useState(null);
+  const [deletingGroup, setDeletingGroup] = useState(null); // {id, description, groupId, total}
 
   if (loading) {
     return (
@@ -42,6 +34,38 @@ export default function TransactionList({
     );
   }
 
+  // Decide o que fazer ao clicar em "excluir":
+  //  - Se for parcelamento: abre modal perguntando "só essa ou todas?"
+  //  - Se for transação simples: confirm padrão e exclui
+  function handleDeleteClick(t) {
+    const isInstallment = !!t.installment_group_id;
+    if (isInstallment) {
+      setDeletingGroup({
+        id: t.id,
+        description: t.description,
+        groupId: t.installment_group_id,
+        total: t.installment_total,
+      });
+    } else {
+      if (confirm(`Excluir "${t.description}"?`)) onDelete(t.id);
+    }
+  }
+
+  async function handleDeleteOnlyThis() {
+    onDelete(deletingGroup.id);
+    setDeletingGroup(null);
+  }
+
+  async function handleDeleteAll() {
+    try {
+      await transactionService.removeGroup(deletingGroup.groupId);
+      setDeletingGroup(null);
+      onChange?.(); // refaz fetch
+    } catch (err) {
+      alert('Erro ao excluir parcelas: ' + (err.message || 'desconhecido'));
+    }
+  }
+
   return (
     <>
       <div className="bg-white border-2 border-ink-900 shadow-flat-sm md:shadow-flat divide-y-2 divide-ink-100">
@@ -51,6 +75,7 @@ export default function TransactionList({
           const isPaid = !!t.paid;
           const cat = t.category || {};
           const card = t.credit_card || null;
+          const isInstallment = !!t.installment_group_id && t.installment_total > 1;
 
           return (
             <div
@@ -90,7 +115,6 @@ export default function TransactionList({
 
               {/* Conteúdo */}
               <div className="flex-1 min-w-0 p-3 md:p-4 flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
-                {/* Detalhes */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <h4
@@ -100,6 +124,15 @@ export default function TransactionList({
                     >
                       {t.description}
                     </h4>
+                    {isInstallment && (
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] md:text-[10px] font-bold uppercase tracking-wider bg-ink-100 text-ink-900 border border-ink-900 whitespace-nowrap"
+                        title={`Parcela ${t.installment_number} de ${t.installment_total}`}
+                      >
+                        <Layers className="w-3 h-3" strokeWidth={2.5} />
+                        {t.installment_number}/{t.installment_total}
+                      </span>
+                    )}
                     {t.recurring_id && (
                       <span
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] md:text-[10px] font-bold uppercase tracking-wider bg-ink-900 text-accent whitespace-nowrap"
@@ -131,7 +164,6 @@ export default function TransactionList({
                   </div>
                 </div>
 
-                {/* Valor + ações */}
                 <div className="flex items-center justify-between md:justify-end gap-2 md:gap-4 mt-1 md:mt-0">
                   <div
                     className={`stat-number text-base md:text-lg font-semibold whitespace-nowrap ${
@@ -150,9 +182,7 @@ export default function TransactionList({
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => {
-                        if (confirm(`Excluir "${t.description}"?`)) onDelete(t.id);
-                      }}
+                      onClick={() => handleDeleteClick(t)}
                       className="w-9 h-9 flex items-center justify-center text-negative hover:bg-red-50 transition-colors"
                       aria-label="Excluir"
                     >
@@ -176,6 +206,54 @@ export default function TransactionList({
             }}
             onCancel={() => setEditing(null)}
           />
+        )}
+      </Modal>
+
+      {/* Modal de exclusão de compra parcelada */}
+      <Modal
+        isOpen={!!deletingGroup}
+        onClose={() => setDeletingGroup(null)}
+        title="Excluir parcela"
+      >
+        {deletingGroup && (
+          <div className="space-y-4">
+            <div className="px-4 py-3 bg-yellow-50 border-2 border-warn">
+              <p className="text-sm">
+                <strong className="font-semibold">"{deletingGroup.description}"</strong> faz parte de uma compra
+                parcelada em <strong>{deletingGroup.total}x</strong>.
+              </p>
+              <p className="text-xs text-ink-700 mt-1">O que você quer fazer?</p>
+            </div>
+
+            <button
+              onClick={handleDeleteOnlyThis}
+              className="w-full text-left px-4 py-3 border-2 border-ink-900 hover:bg-accent/30 transition-colors"
+            >
+              <p className="font-semibold text-sm">Excluir só esta parcela</p>
+              <p className="text-xs text-ink-600 mt-0.5">
+                As outras parcelas continuam normais.
+              </p>
+            </button>
+
+            <button
+              onClick={handleDeleteAll}
+              className="w-full text-left px-4 py-3 border-2 border-negative text-negative hover:bg-red-50 transition-colors"
+            >
+              <p className="font-semibold text-sm">
+                Excluir TODAS as {deletingGroup.total} parcelas
+              </p>
+              <p className="text-xs text-negative/80 mt-0.5">
+                Cancela a compra inteira em todos os meses.
+              </p>
+            </button>
+
+            <button
+              onClick={() => setDeletingGroup(null)}
+              className="btn-ghost w-full"
+            >
+              Cancelar
+            </button>
+          </div>
         )}
       </Modal>
     </>

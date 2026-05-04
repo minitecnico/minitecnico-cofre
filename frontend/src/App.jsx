@@ -9,6 +9,7 @@ import TransactionListPage from './pages/TransactionListPage';
 import Cards from './pages/Cards';
 import Categories from './pages/Categories';
 import Recurring from './pages/Recurring';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -31,6 +32,7 @@ export default function App() {
               <Route path="recurring" element={<Recurring />} />
               <Route path="cards" element={<Cards />} />
               <Route path="categories" element={<Categories />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
           </Routes>
         </BrowserRouter>

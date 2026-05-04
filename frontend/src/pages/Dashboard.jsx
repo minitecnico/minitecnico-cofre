@@ -66,10 +66,10 @@ export default function Dashboard() {
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 md:gap-4">
         <div className="min-w-0">
           <p className="text-[10px] md:text-xs uppercase tracking-widest text-ink-500 font-semibold">
-            Bem vindo!
+            Painel principal
           </p>
           <h1 className="font-display text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold mt-1 leading-tight">
-            Painel Financeiro🪙
+            Suas finanças em um relance
           </h1>
         </div>
 
@@ -121,6 +121,7 @@ export default function Dashboard() {
           value={data.balance.balance}
           variant="balance"
           icon={Wallet}
+          trend={data.comparison?.balanceChange}
         />
         <StatCard
           label="Receitas"
@@ -128,6 +129,7 @@ export default function Dashboard() {
           value={data.periodSummary.income}
           variant="income"
           icon={TrendingUp}
+          trend={data.comparison?.incomeChange}
         />
         <StatCard
           label="Despesas"
@@ -135,6 +137,7 @@ export default function Dashboard() {
           value={data.periodSummary.expense}
           variant="expense"
           icon={TrendingDown}
+          trend={data.comparison?.expenseChange}
         />
       </div>
 

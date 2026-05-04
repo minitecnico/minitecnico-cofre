@@ -82,6 +82,61 @@ export const transactionService = {
   },
 
   /**
+   * Remove TODAS as parcelas de uma compra (mesmo installment_group_id).
+   */
+  async removeGroup(groupId) {
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('installment_group_id', groupId);
+    if (error) throw error;
+  },
+
+  /**
+   * Cria uma compra parcelada — N transações com mesmo installment_group_id.
+   * Cada parcela é independente (cai no mês correspondente, pode ser editada
+   * separadamente). O groupId conecta todas para edição/exclusão em massa.
+   *
+   * @param {Object} payload - dados da compra (sem amount/date — calculados aqui)
+   * @param {number} payload.totalAmount - valor TOTAL da compra
+   * @param {number} payload.installmentCount - número de parcelas (>= 2)
+   * @param {string} payload.startDate - data da primeira parcela (YYYY-MM-DD)
+   * @param {string} payload.description - descrição (vai virar "X (1/N)", "X (2/N)"...)
+   */
+  async createInstallments(payload) {
+    const { generateInstallmentDates, splitInstallmentAmount } = await import('../utils/format');
+    const userId = await currentUserId();
+
+    const { totalAmount, installmentCount, startDate, description, ...rest } = payload;
+
+    if (installmentCount < 2) throw new Error('Use create() para 1 parcela');
+
+    const dates = generateInstallmentDates(startDate, installmentCount);
+    const amounts = splitInstallmentAmount(totalAmount, installmentCount);
+
+    // Gera UUID no cliente — o Postgres aceita
+    const groupId = crypto.randomUUID();
+
+    const rows = dates.map((date, i) => ({
+      user_id: userId,
+      type: rest.type,
+      amount: amounts[i],
+      description: `${description} (${i + 1}/${installmentCount})`,
+      date,
+      category_id: rest.category_id,
+      credit_card_id: rest.credit_card_id || null,
+      installment_total: installmentCount,
+      installment_number: i + 1,
+      installment_group_id: groupId,
+      paid: false,
+    }));
+
+    const { data, error } = await supabase.from('transactions').insert(rows).select();
+    if (error) throw error;
+    return { groupId, transactions: data };
+  },
+
+  /**
    * Alterna o status de pagamento de uma despesa.
    * Atualização otimista: o frontend já reflete a mudança antes da resposta.
    */
@@ -306,11 +361,25 @@ export const recurringService = {
  */
 export const dashboardService = {
   async summary(period = 'month', referenceMonth = null) {
-    const [balance, periodSummary, byCategory, monthlyHistory] = await Promise.all([
+    // Calcula mês anterior pra comparação
+    const previousMonth = (() => {
+      if (!referenceMonth) {
+        // Se não passou mês de referência, usa o atual
+        const now = new Date();
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+      }
+      const [y, m] = referenceMonth.split('-').map(Number);
+      const prev = new Date(y, m - 2, 1); // m-2: getMonth é 0-indexed e queremos -1 mês
+      return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+    })();
+
+    const [balance, periodSummary, byCategory, monthlyHistory, previousBalance] = await Promise.all([
       supabase.rpc('get_balance', { p_month: referenceMonth }).then((r) => r.data?.[0] || { balance: 0, total_income: 0, total_expense: 0 }),
       supabase.rpc('get_period_summary', { p_period: period, p_reference: referenceMonth }).then((r) => r.data?.[0] || { income: 0, expense: 0, balance: 0, tx_count: 0 }),
       supabase.rpc('get_expenses_by_category', { p_month: referenceMonth }).then((r) => r.data || []),
       supabase.rpc('get_monthly_history', { p_months: 6 }).then((r) => r.data || []),
+      supabase.rpc('get_balance', { p_month: previousMonth }).then((r) => r.data?.[0] || { balance: 0, total_income: 0, total_expense: 0 }),
     ]);
     // Normaliza pra estrutura que o frontend já consome
     const balanceObj = {
@@ -324,6 +393,27 @@ export const dashboardService = {
       expense: Number(periodSummary.expense) || 0,
       balance: Number(periodSummary.balance) || 0,
       count: Number(periodSummary.tx_count) || 0,
+    };
+
+    // Comparação com mês anterior — calcula variações em %
+    const prevIncome = Number(previousBalance.total_income) || 0;
+    const prevExpense = Number(previousBalance.total_expense) || 0;
+    const prevBalanceVal = Number(previousBalance.balance) || 0;
+
+    function pctChange(current, previous) {
+      if (previous === 0) return null; // não tem como comparar com zero
+      return ((current - previous) / Math.abs(previous)) * 100;
+    }
+
+    const comparison = {
+      incomeChange: pctChange(periodObj.income, prevIncome),
+      expenseChange: pctChange(periodObj.expense, prevExpense),
+      balanceChange: pctChange(balanceObj.balance, prevBalanceVal),
+      previous: {
+        income: prevIncome,
+        expense: prevExpense,
+        balance: prevBalanceVal,
+      },
     };
 
     const alerts = [];
@@ -342,6 +432,7 @@ export const dashboardService = {
     return {
       balance: balanceObj,
       periodSummary: periodObj,
+      comparison,
       byCategory: byCategory.map((c) => ({
         categoryId: c.category_id,
         name: c.name,

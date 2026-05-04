@@ -1,19 +1,18 @@
-import { useState, useEffect } from 'react';
-import { Repeat } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Repeat, CreditCard as CardIcon } from 'lucide-react';
 import { categoryService, transactionService, cardService, recurringService } from '../services';
-import { parseAmount } from '../utils/format';
+import { parseAmount, formatCurrency, splitInstallmentAmount } from '../utils/format';
 import { useMonth } from '../context/MonthContext';
 
 /**
- * Formulário de transação.
- * --------------------------------------------------------------
- * Suporta:
- *  - Receitas e despesas
- *  - Cartão de crédito (apenas despesas)
- *  - Recorrência mensal (cria modelo + transação do mês atual)
+ * Formulário de transação com:
+ *  - Receita ou despesa
+ *  - Pagamento via conta ou cartão
+ *  - Recorrência mensal (cria modelo)
+ *  - Parcelamento (apenas para despesas no cartão)
  *
- * Recorrência só aparece em modo "criação", não em edição.
- * Editar uma transação avulsa não a transforma em recorrente.
+ * Recorrência e parcelamento são MUTUAMENTE EXCLUSIVOS — uma compra parcelada
+ * já cria múltiplas transações; recorrente é um modelo separado.
  */
 export default function TransactionForm({ initial = null, onSaved, onCancel, defaultType = 'expense' }) {
   const isEdit = !!initial;
@@ -30,6 +29,7 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
   const [creditCardId, setCreditCardId] = useState(initial?.credit_card?.id || '');
   const [paymentMethod, setPaymentMethod] = useState(initial?.credit_card ? 'card' : 'account');
   const [isRecurring, setIsRecurring] = useState(false);
+  const [installmentCount, setInstallmentCount] = useState(1);
 
   const [categories, setCategories] = useState([]);
   const [cards, setCards] = useState([]);
@@ -52,6 +52,36 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
     }
   }, [categories, categoryId]);
 
+  // Reset parcelamento se trocar de pagamento ou tipo
+  useEffect(() => {
+    if (paymentMethod !== 'card' || type !== 'expense') {
+      setInstallmentCount(1);
+    }
+  }, [paymentMethod, type]);
+
+  // Recorrência e parcelamento são exclusivos
+  useEffect(() => {
+    if (installmentCount > 1) setIsRecurring(false);
+  }, [installmentCount]);
+
+  useEffect(() => {
+    if (isRecurring) setInstallmentCount(1);
+  }, [isRecurring]);
+
+  // Calcula valor por parcela em tempo real (preview)
+  const installmentPreview = useMemo(() => {
+    const total = parseAmount(amount);
+    if (installmentCount < 2 || total <= 0) return null;
+    const parts = splitInstallmentAmount(total, installmentCount);
+    return {
+      perInstallment: parts[0],
+      hasRounding: parts[0] !== parts[parts.length - 1],
+    };
+  }, [amount, installmentCount]);
+
+  // Pode parcelar? Só despesas no cartão, com valor > 0, não sendo edição
+  const canShowInstallments = !isEdit && type === 'expense' && paymentMethod === 'card';
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
@@ -60,26 +90,31 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
     try {
       const parsedAmount = parseAmount(amount);
       const trimmedDesc = description.trim();
-      const payload = {
-        type,
-        amount: parsedAmount,
-        description: trimmedDesc,
-        date,
-        category_id: categoryId,
-        credit_card_id: type === 'expense' && paymentMethod === 'card' ? creditCardId : null,
-      };
+      const cardIdToUse = type === 'expense' && paymentMethod === 'card' ? creditCardId : null;
 
-      if (!payload.amount || payload.amount <= 0) throw new Error('Informe um valor válido');
-      if (!payload.description) throw new Error('Informe uma descrição');
-      if (!payload.category_id) throw new Error('Selecione uma categoria');
+      if (!parsedAmount || parsedAmount <= 0) throw new Error('Informe um valor válido');
+      if (!trimmedDesc) throw new Error('Informe uma descrição');
+      if (!categoryId) throw new Error('Selecione uma categoria');
       if (type === 'expense' && paymentMethod === 'card' && !creditCardId) {
         throw new Error('Selecione um cartão');
       }
+      if (installmentCount > 1 && (!cardIdToUse)) {
+        throw new Error('Parcelamento exige cartão de crédito');
+      }
 
+      // Edição (sempre uma transação só)
       if (isEdit) {
-        await transactionService.update(initial.id, payload);
-      } else if (isRecurring) {
-        // 1. Cria o MODELO recorrente
+        await transactionService.update(initial.id, {
+          type,
+          amount: parsedAmount,
+          description: trimmedDesc,
+          date,
+          category_id: categoryId,
+          credit_card_id: cardIdToUse,
+        });
+      }
+      // Recorrência (modelo + 1 transação no mês atual)
+      else if (isRecurring) {
         const dayOfMonth = new Date(date + 'T00:00:00').getDate();
         const startMonth = `${currentMonthString}-01`;
         const recurring = await recurringService.create({
@@ -87,12 +122,10 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
           amount: parsedAmount,
           description: trimmedDesc,
           category_id: categoryId,
-          credit_card_id: payload.credit_card_id,
+          credit_card_id: cardIdToUse,
           day_of_month: dayOfMonth,
           start_month: startMonth,
         });
-        // 2. Cria a transação do mês atual já linkada ao modelo
-        // (chamando direto o supabase pra incluir recurring_id)
         const { supabase } = await import('../services/supabase');
         const { data: { user } } = await supabase.auth.getUser();
         const { error: txErr } = await supabase.from('transactions').insert({
@@ -102,13 +135,34 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
           description: trimmedDesc,
           date,
           category_id: categoryId,
-          credit_card_id: payload.credit_card_id,
+          credit_card_id: cardIdToUse,
           recurring_id: recurring.id,
-          paid: type === 'income', // receita já vem como recebida
+          paid: type === 'income',
         });
         if (txErr) throw txErr;
-      } else {
-        await transactionService.create(payload);
+      }
+      // Parcelamento (cria N transações em meses diferentes)
+      else if (installmentCount > 1) {
+        await transactionService.createInstallments({
+          type,
+          totalAmount: parsedAmount,
+          installmentCount,
+          startDate: date,
+          description: trimmedDesc,
+          category_id: categoryId,
+          credit_card_id: cardIdToUse,
+        });
+      }
+      // Transação simples
+      else {
+        await transactionService.create({
+          type,
+          amount: parsedAmount,
+          description: trimmedDesc,
+          date,
+          category_id: categoryId,
+          credit_card_id: cardIdToUse,
+        });
       }
 
       onSaved?.();
@@ -146,7 +200,9 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
       )}
 
       <div>
-        <label className="label">Valor</label>
+        <label className="label">
+          {installmentCount > 1 ? `Valor TOTAL da compra` : 'Valor'}
+        </label>
         <div className="relative">
           <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-ink-500">R$</span>
           <input
@@ -159,6 +215,17 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
             autoFocus
           />
         </div>
+        {installmentPreview && (
+          <p className="text-xs text-ink-600 mt-2">
+            <strong>{installmentCount}x</strong> de{' '}
+            <span className="font-mono font-semibold text-ink-900">
+              {formatCurrency(installmentPreview.perInstallment)}
+            </span>
+            {installmentPreview.hasRounding && (
+              <span className="text-ink-500"> (com ajuste de centavos)</span>
+            )}
+          </p>
+        )}
       </div>
 
       <div>
@@ -167,7 +234,7 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder={type === 'income' ? 'Ex: Salário' : 'Ex: Supermercado'}
+          placeholder={type === 'income' ? 'Ex: Salário' : 'Ex: Tênis novo'}
           className="input-field"
           maxLength={100}
         />
@@ -175,7 +242,7 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="label">Data</label>
+          <label className="label">{installmentCount > 1 ? 'Data da 1ª parcela' : 'Data'}</label>
           <input
             type="date"
             value={date}
@@ -245,8 +312,36 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
         </div>
       )}
 
-      {/* Recorrência — só aparece em modo criação */}
-      {!isEdit && (
+      {/* Parcelamento — apenas para despesa no cartão */}
+      {canShowInstallments && (
+        <div>
+          <label className="label flex items-center gap-2">
+            <CardIcon className="w-3.5 h-3.5" />
+            Parcelas
+          </label>
+          <select
+            value={installmentCount}
+            onChange={(e) => setInstallmentCount(parseInt(e.target.value, 10))}
+            className="input-field"
+          >
+            <option value={1}>À vista</option>
+            {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 24].map((n) => (
+              <option key={n} value={n}>
+                {n}x sem juros
+              </option>
+            ))}
+          </select>
+          {installmentCount > 1 && (
+            <p className="text-xs text-ink-600 mt-2 px-3 py-2 bg-accent/30 border-2 border-ink-900">
+              ✨ Vamos criar <strong>{installmentCount} parcelas</strong> automaticamente, uma em cada mês.
+              Você pode editar ou excluir uma parcela específica depois.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Recorrência — só em criação, e não pode ter parcelamento */}
+      {!isEdit && installmentCount === 1 && (
         <label
           className={`flex items-start gap-3 p-3 md:p-4 border-2 cursor-pointer transition-colors ${
             isRecurring ? 'border-ink-900 bg-accent/30' : 'border-ink-300 hover:border-ink-900 bg-white'
@@ -265,9 +360,9 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
             </div>
             <p className="text-xs text-ink-600 mt-0.5">
               {isRecurring
-                ? `Será criada automaticamente todo mês no mesmo dia (${
+                ? `Será criada automaticamente todo mês no dia ${
                     new Date(date + 'T00:00:00').getDate()
-                  }).`
+                  }.`
                 : 'Marque para repetir essa transação todos os meses.'}
             </p>
           </div>
@@ -291,7 +386,9 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, def
               ? 'Salvar alterações'
               : isRecurring
                 ? 'Criar recorrência'
-                : 'Adicionar transação'}
+                : installmentCount > 1
+                  ? `Criar ${installmentCount} parcelas`
+                  : 'Adicionar transação'}
         </button>
       </div>
     </form>

@@ -60,18 +60,25 @@ export default function StatCard({ label, value, variant = 'balance', icon: Icon
         {formatCurrency(value)}
       </div>
 
-      {trend !== undefined && (
-        <div className="mt-2 md:mt-3 flex items-center gap-1 text-xs md:text-sm">
+      {trend !== undefined && trend !== null && (
+        <div className="mt-2 md:mt-3 flex items-center gap-1.5 text-xs md:text-sm">
           {trend > 0 ? (
-            <ArrowUpRight className="w-4 h-4 text-positive" />
-          ) : (
-            <ArrowDownRight className="w-4 h-4 text-negative" />
-          )}
-          <span className={`font-medium ${trend > 0 ? 'text-positive' : 'text-negative'}`}>
-            {Math.abs(trend).toFixed(1)}%
+            <ArrowUpRight className={`w-4 h-4 ${variant === 'expense' ? 'text-negative' : 'text-positive'} flex-shrink-0`} />
+          ) : trend < 0 ? (
+            <ArrowDownRight className={`w-4 h-4 ${variant === 'expense' ? 'text-positive' : 'text-negative'} flex-shrink-0`} />
+          ) : null}
+          <span
+            className={`font-semibold ${
+              // Pra despesa: subir é ruim. Pra receita/saldo: subir é bom.
+              variant === 'expense'
+                ? trend > 0 ? 'text-negative' : 'text-positive'
+                : trend > 0 ? 'text-positive' : 'text-negative'
+            }`}
+          >
+            {trend > 0 ? '+' : ''}{Math.abs(trend).toFixed(1)}%
           </span>
           <span className={`truncate ${variant === 'balance' ? 'text-ink-400' : 'text-ink-500'}`}>
-            vs período anterior
+            vs mês anterior
           </span>
         </div>
       )}

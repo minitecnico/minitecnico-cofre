@@ -1,4 +1,5 @@
-import { ArrowUpCircle, ArrowDownCircle, Plus } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { ArrowUpCircle, ArrowDownCircle, Plus, Search, X } from 'lucide-react';
 import { useTransactions } from '../hooks/useTransactions';
 import TransactionList from '../components/TransactionList';
 import Modal from '../components/Modal';
@@ -8,26 +9,33 @@ import { useDisclosure } from '../hooks/useDisclosure';
 import { formatCurrency } from '../utils/format';
 import { useMonth } from '../context/MonthContext';
 
-/**
- * Página de listagem (Receitas ou Despesas).
- * O mês mostrado vem do MonthSelector global — useTransactions já filtra automaticamente.
- */
 export default function TransactionListPage({ type = 'income' }) {
   const isIncome = type === 'income';
   const { label } = useMonth();
   const { isOpen, open, close } = useDisclosure();
+  const [searchTerm, setSearchTerm] = useState('');
 
   const { items, total, loading, refresh, remove, togglePaid } = useTransactions({
     type,
     limit: 200,
   });
 
-  const totalAmount = items.reduce((s, t) => s + Number(t.amount), 0);
+  // Busca client-side: descrição + categoria
+  const filteredItems = useMemo(() => {
+    if (!searchTerm.trim()) return items;
+    const q = searchTerm.toLowerCase().trim();
+    return items.filter((t) => {
+      const desc = (t.description || '').toLowerCase();
+      const catName = (t.category?.name || '').toLowerCase();
+      return desc.includes(q) || catName.includes(q);
+    });
+  }, [items, searchTerm]);
 
-  // Para despesas: separa pagas vs pendentes
-  const pendingCount = !isIncome ? items.filter((t) => !t.paid).length : 0;
+  const totalAmount = filteredItems.reduce((s, t) => s + Number(t.amount), 0);
+
+  const pendingCount = !isIncome ? filteredItems.filter((t) => !t.paid).length : 0;
   const pendingTotal = !isIncome
-    ? items.filter((t) => !t.paid).reduce((s, t) => s + Number(t.amount), 0)
+    ? filteredItems.filter((t) => !t.paid).reduce((s, t) => s + Number(t.amount), 0)
     : 0;
 
   const Icon = isIncome ? ArrowUpCircle : ArrowDownCircle;
@@ -75,16 +83,19 @@ export default function TransactionListPage({ type = 'income' }) {
             }`}
           >
             Total {isIncome ? 'recebido' : 'gasto'} no mês
+            {searchTerm && <span className="ml-1 normal-case">· filtrado</span>}
           </p>
           <p className="stat-number text-3xl md:text-4xl mt-2 md:mt-3 break-all">
             {formatCurrency(totalAmount)}
           </p>
           <p className={`text-xs md:text-sm mt-2 ${isIncome ? 'text-ink-700' : 'text-ink-400'}`}>
-            {total} {total === 1 ? 'transação' : 'transações'}
+            {filteredItems.length} {filteredItems.length === 1 ? 'transação' : 'transações'}
+            {searchTerm && total !== filteredItems.length && (
+              <span> de {total}</span>
+            )}
           </p>
         </div>
 
-        {/* Card de pendentes (apenas em despesas) */}
         {!isIncome && (
           <div className="card-flat p-4 md:p-6 bg-white">
             <p className="text-[10px] md:text-xs uppercase font-semibold tracking-widest text-ink-500">
@@ -106,14 +117,39 @@ export default function TransactionListPage({ type = 'income' }) {
         )}
       </div>
 
+      {/* Busca */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
+        <input
+          type="search"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Buscar por descrição ou categoria…"
+          className="input-field pl-10 pr-10"
+        />
+        {searchTerm && (
+          <button
+            onClick={() => setSearchTerm('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center hover:bg-ink-100 transition-colors"
+            aria-label="Limpar busca"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
       {/* Lista */}
       <TransactionList
-        items={items}
+        items={filteredItems}
         loading={loading}
         onChange={refresh}
         onDelete={remove}
         onTogglePaid={togglePaid}
-        emptyMessage={`Nenhuma ${isIncome ? 'receita' : 'despesa'} cadastrada em ${label}.`}
+        emptyMessage={
+          searchTerm
+            ? `Nenhuma ${isIncome ? 'receita' : 'despesa'} encontrada para "${searchTerm}".`
+            : `Nenhuma ${isIncome ? 'receita' : 'despesa'} cadastrada em ${label}.`
+        }
       />
 
       {/* Modal nova transação */}
