@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { CreditCard as CardIcon, Plus, Calendar, AlertTriangle, Trash2, Pencil, CheckCircle2, Wallet, Sparkles } from 'lucide-react';
 import { cardService } from '../services';
 import { formatCurrency, formatPercent, formatDate } from '../utils/format';
@@ -193,8 +193,10 @@ function CardItem({ summary, onEdit, onDelete, onPayBill, onSelect, selected, pa
 
   return (
     <div
-      className={`relative rounded-2xl shadow-soft-md hover:shadow-soft-lg transition-all duration-300 cursor-pointer overflow-hidden ${
-        selected ? 'ring-2 ring-accent ring-offset-2 ring-offset-ink-50' : ''
+      className={`relative rounded-2xl shadow-soft-md transition-all duration-300 cursor-pointer overflow-hidden ${
+        selected
+          ? 'ring-4 ring-accent ring-offset-2 ring-offset-ink-50 shadow-soft-lg scale-[1.01]'
+          : 'hover:shadow-soft-lg hover:-translate-y-0.5'
       }`}
       onClick={() => onSelect(card.id)}
     >
@@ -210,7 +212,7 @@ function CardItem({ summary, onEdit, onDelete, onPayBill, onSelect, selected, pa
 
       {/* Conteúdo */}
       <div className="relative p-5 md:p-6 text-white">
-        {/* Header: bandeira + nome + ícone */}
+        {/* Header: bandeira + nome + ações no topo direito */}
         <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-[10px] md:text-xs uppercase tracking-widest opacity-80 font-bold">
@@ -220,8 +222,28 @@ function CardItem({ summary, onEdit, onDelete, onPayBill, onSelect, selected, pa
               {card.name}
             </h3>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-sm flex items-center justify-center flex-shrink-0">
-            <CardIcon className="w-5 h-5" />
+
+          {/* Ações: editar + excluir + ícone do cartão (todos juntos, organizados) */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              onClick={(e) => { e.stopPropagation(); onEdit(card); }}
+              className="w-9 h-9 rounded-lg bg-white/20 hover:bg-white/30 backdrop-blur-sm flex items-center justify-center transition-all duration-200"
+              title="Editar cartão"
+              aria-label="Editar cartão"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(summary); }}
+              className="w-9 h-9 rounded-lg bg-white/20 hover:bg-negative backdrop-blur-sm flex items-center justify-center transition-all duration-200"
+              title="Excluir cartão"
+              aria-label="Excluir cartão"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+            <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-sm flex items-center justify-center ml-1">
+              <CardIcon className="w-5 h-5" />
+            </div>
           </div>
         </div>
 
@@ -322,26 +344,6 @@ function CardItem({ summary, onEdit, onDelete, onPayBill, onSelect, selected, pa
           </div>
         )}
       </div>
-
-      {/* Ações editar/excluir — sempre visíveis, posição clara */}
-      <div className="absolute top-3 right-3 flex gap-1.5 z-10">
-        <button
-          onClick={(e) => { e.stopPropagation(); onEdit(card); }}
-          className="w-9 h-9 rounded-lg bg-white/20 hover:bg-white/30 backdrop-blur-sm flex items-center justify-center text-white transition-all duration-200"
-          title="Editar cartão"
-          aria-label="Editar cartão"
-        >
-          <Pencil className="w-4 h-4" />
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(card); }}
-          className="w-9 h-9 rounded-lg bg-white/20 hover:bg-negative backdrop-blur-sm flex items-center justify-center text-white transition-all duration-200"
-          title="Excluir cartão"
-          aria-label="Excluir cartão"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
-      </div>
     </div>
   );
 }
@@ -416,6 +418,24 @@ export default function CardsPage() {
   const [confirmingPay, setConfirmingPay] = useState(null); // { card, openBill, unpaidCount }
   const [feedback, setFeedback] = useState(null); // { type, text }
   const { isOpen, open, close } = useDisclosure();
+
+  // Ref para fazer scroll suave até o histórico quando seleciona um cartão
+  const historyRef = useRef(null);
+  const [shouldScroll, setShouldScroll] = useState(false);
+
+  function handleSelectCard(cardId) {
+    const isAlreadySelected = selectedId === cardId;
+    setSelectedId(cardId);
+    // Só aciona scroll se for uma seleção nova (não na carga inicial)
+    if (!isAlreadySelected) setShouldScroll(true);
+  }
+
+  useEffect(() => {
+    if (shouldScroll && historyRef.current) {
+      historyRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setShouldScroll(false);
+    }
+  }, [shouldScroll, selectedId]);
 
   async function load() {
     setLoading(true);
@@ -551,7 +571,7 @@ export default function CardsPage() {
                 onEdit={(c) => { setEditing(c); open(); }}
                 onDelete={requestDelete}
                 onPayBill={requestPayBill}
-                onSelect={setSelectedId}
+                onSelect={handleSelectCard}
                 selected={selectedId === summary.card.id}
                 payingId={payingId}
               />
@@ -559,10 +579,25 @@ export default function CardsPage() {
           </div>
 
           {selectedId && (
-            <div>
-              <h3 className="font-display text-xl md:text-2xl font-bold mb-3 md:mb-4 tracking-tight">
-                Histórico de compras
-              </h3>
+            <div ref={historyRef} className="scroll-mt-4">
+              {(() => {
+                const sel = cards.find((c) => c.card.id === selectedId);
+                return (
+                  <div className="flex items-center justify-between mb-3 md:mb-4 gap-3 flex-wrap">
+                    <h3 className="font-display text-xl md:text-2xl font-bold tracking-tight flex items-center gap-2">
+                      <span>Histórico</span>
+                      {sel && (
+                        <span
+                          className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs md:text-sm font-bold text-white"
+                          style={{ backgroundColor: sel.card.color }}
+                        >
+                          {sel.card.name}
+                        </span>
+                      )}
+                    </h3>
+                  </div>
+                );
+              })()}
               <CardHistory cardId={selectedId} />
             </div>
           )}
