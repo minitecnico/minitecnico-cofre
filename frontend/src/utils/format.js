@@ -24,8 +24,28 @@ export function formatCurrency(value, options = {}) {
   return num < 0 ? `− ${formatted}` : formatted;
 }
 
+/**
+ * Formata uma data para exibição.
+ * --------------------------------------------------------------
+ * IMPORTANTE: trata strings 'YYYY-MM-DD' como data LOCAL, não UTC.
+ *
+ * Por que isso importa: se você fizer new Date('2026-08-28'), o JS interpreta
+ * como UTC midnight. Em timezones a oeste (Brasil = UTC-3), isso vira o dia
+ * ANTERIOR (27/08 às 21h). O usuário cadastra dia 28 e vê dia 27 — bug clássico.
+ *
+ * A solução é parsear a string manualmente (ano, mês, dia) e construir
+ * a Date com o construtor de componentes — que sempre é interpretado como local.
+ */
 export function formatDate(date, pattern = 'short') {
-  const d = new Date(date);
+  let d;
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(date)) {
+    // String ISO de data: parseia componentes pra evitar shift de timezone
+    const [y, m, dd] = date.slice(0, 10).split('-').map(Number);
+    d = new Date(y, m - 1, dd);
+  } else {
+    d = new Date(date);
+  }
+
   if (pattern === 'short') {
     return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
   }
