@@ -35,7 +35,7 @@ function emptyItem(defaults = {}) {
   };
 }
 
-const INSTALLMENT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 24];
+const INSTALLMENT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 24, 36, 48, 60, 72, 84, 96, 120, 180, 240];
 
 export default function BatchTransactionForm({ type = 'expense', onSaved, onCancel }) {
   const isIncome = type === 'income';
@@ -491,9 +491,16 @@ function BatchItemRow({
                 className="input-field !min-h-[36px] !py-1.5 !text-xs"
               >
                 <option value={1}>À vista</option>
-                {INSTALLMENT_OPTIONS.filter((n) => n > 1).map((n) => (
-                  <option key={n} value={n}>{n}x sem juros</option>
-                ))}
+                <optgroup label="Parcelado">
+                  {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 24].map((n) => (
+                    <option key={n} value={n}>{n}x</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Empréstimo / Financiamento">
+                  {[36, 48, 60, 72, 84, 96, 120, 180, 240].map((n) => (
+                    <option key={n} value={n}>{n}x · {Math.round(n / 12 * 10) / 10} anos</option>
+                  ))}
+                </optgroup>
               </select>
               {installmentPreview && (
                 <p className="text-[10px] text-ink-600 mt-1.5">

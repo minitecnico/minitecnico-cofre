@@ -325,16 +325,24 @@ export default function TransactionForm({ initial = null, onSaved, onCancel, onS
             className="input-field"
           >
             <option value={1}>À vista</option>
-            {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 24].map((n) => (
-              <option key={n} value={n}>
-                {n}x sem juros
-              </option>
-            ))}
+            <optgroup label="Parcelado (curto prazo)">
+              {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 24].map((n) => (
+                <option key={n} value={n}>{n}x</option>
+              ))}
+            </optgroup>
+            <optgroup label="Empréstimo / Financiamento (longo prazo)">
+              {[36, 48, 60, 72, 84, 96, 120, 180, 240].map((n) => (
+                <option key={n} value={n}>{n}x · {Math.round(n / 12 * 10) / 10} anos</option>
+              ))}
+            </optgroup>
           </select>
           {installmentCount > 1 && (
-            <p className="text-xs text-ink-600 mt-2 px-3 py-2 bg-accent/30 border-2 border-ink-900">
-              ✨ Vamos criar <strong>{installmentCount} parcelas</strong> automaticamente, uma em cada mês.
-              Você pode editar ou excluir uma parcela específica depois.
+            <p className="text-xs text-ink-600 mt-2 px-3 py-2.5 bg-accent/20 rounded-xl">
+              ✨ Vamos criar <strong>{installmentCount} parcelas</strong>{' '}
+              {installmentCount >= 36 && (
+                <span>(≈ {Math.round(installmentCount / 12 * 10) / 10} anos)</span>
+              )}{' '}
+              automaticamente, uma em cada mês. Você pode editar ou excluir parcelas individuais depois.
             </p>
           )}
         </div>
