@@ -1,56 +1,78 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Wallet, TrendingUp, TrendingDown, AlertTriangle, AlertCircle, Sparkles,
-  Filter, ArrowUpDown, Clock, Check, Repeat, Layers,
+  Search, X, SlidersHorizontal, Clock, Check, CreditCard as CardIcon,
+  Tag, Calendar as CalIcon,
 } from 'lucide-react';
 import { useDashboard } from '../hooks/useDashboard';
-import { dashboardService } from '../services';
+import { dashboardService, categoryService, cardService } from '../services';
 import StatCard from '../components/StatCard';
 import { MonthlyChart, CategoryChart } from '../components/Charts';
 import TransactionList from '../components/TransactionList';
 import { useTransactions } from '../hooks/useTransactions';
-import { formatCurrency } from '../utils/format';
+import { formatCurrency, parseAmount } from '../utils/format';
 import InstallBanner from '../components/InstallBanner';
 import MonthSelector from '../components/MonthSelector';
 import { useMonth } from '../context/MonthContext';
 
-/**
- * Filtros disponíveis na lista de transações do dashboard:
- *   - status: all | pending | paid
- *   - kind:   all | recurring | installment
- *   - sort:   date_desc (recentes 1º) | date_asc | due (vencimento próximo 1º) | amount_desc
- */
-const STATUS_FILTERS = [
+const PERIOD_OPTIONS = [
+  { id: 'all', label: 'Todo o mês' },
+  { id: 'today', label: 'Hoje' },
+  { id: 'next7', label: 'Próx. 7 dias' },
+  { id: 'next30', label: 'Próx. 30 dias' },
+  { id: 'overdue', label: 'Vencidas' },
+];
+
+const STATUS_OPTIONS = [
   { id: 'all', label: 'Todas' },
   { id: 'pending', label: 'Pendentes', icon: Clock },
   { id: 'paid', label: 'Pagas', icon: Check },
 ];
 
-const KIND_FILTERS = [
-  { id: 'all', label: 'Todos os tipos' },
-  { id: 'recurring', label: 'Recorrentes', icon: Repeat },
-  { id: 'installment', label: 'Parceladas', icon: Layers },
-];
+/**
+ * Helper: data de hoje sem hora (timezone local).
+ */
+function today() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-const SORT_OPTIONS = [
-  { id: 'due', label: 'Vencimento próximo' },
-  { id: 'date_desc', label: 'Mais recentes' },
-  { id: 'date_asc', label: 'Mais antigas' },
-  { id: 'amount_desc', label: 'Maior valor' },
-  { id: 'amount_asc', label: 'Menor valor' },
-];
+/**
+ * Parsear string YYYY-MM-DD como data local (sem timezone shift).
+ */
+function parseLocalDate(str) {
+  if (!str) return null;
+  const [y, m, d] = str.slice(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
 
 export default function Dashboard() {
   const { data, loading, refresh } = useDashboard('month');
-  // Buscamos um número maior de transações pra dar conta dos filtros
-  const { items: rawItems, refresh: refreshList, remove: removeTx, togglePaid: togglePaidTx } = useTransactions({ limit: 100 });
+  const { items: rawItems, refresh: refreshList, remove: removeTx, togglePaid: togglePaidTx } = useTransactions({ limit: 200 });
   const { label: monthLabel } = useMonth();
   const [forecast, setForecast] = useState(null);
 
+  // ─────────────────────────────────────────────────────────────────
   // Estados dos filtros
+  // ─────────────────────────────────────────────────────────────────
+  const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [kindFilter, setKindFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('due');
+  const [periodFilter, setPeriodFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all'); // 'all' ou category_id
+  const [cardFilter, setCardFilter] = useState('all'); // 'all' | 'cash' | card_id
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Categorias e cartões (pra montar dropdowns) — buscamos uma vez
+  const [categories, setCategories] = useState([]);
+  const [cards, setCards] = useState([]);
+
+  useEffect(() => {
+    categoryService.list().then(setCategories).catch(() => setCategories([]));
+    cardService.list().then((data) => setCards(data.map((d) => d.card))).catch(() => setCards([]));
+  }, []);
 
   async function loadForecast() {
     const data = await dashboardService.forecast(3);
@@ -63,57 +85,138 @@ export default function Dashboard() {
     if (forecast) loadForecast();
   }
 
-  // Aplica filtros + ordenação
+  // Categorias ordenadas por uso (mais usadas primeiro) na lista atual
+  const categoriesByUsage = useMemo(() => {
+    const counts = {};
+    rawItems.forEach((t) => {
+      const id = t.category?.id;
+      if (id) counts[id] = (counts[id] || 0) + 1;
+    });
+    return [...categories].sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0));
+  }, [rawItems, categories]);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Aplicação dos filtros + ORDENAÇÃO HIERÁRQUICA POR VENCIMENTO
+  // ─────────────────────────────────────────────────────────────────
   const filteredItems = useMemo(() => {
     let items = [...rawItems];
 
-    // Filtro por status (só faz sentido para despesas; receitas sempre "pagas")
+    // 1) Busca textual
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase().trim();
+      items = items.filter((t) => {
+        const desc = (t.description || '').toLowerCase();
+        const cat = (t.category?.name || '').toLowerCase();
+        return desc.includes(q) || cat.includes(q);
+      });
+    }
+
+    // 2) Status
     if (statusFilter === 'pending') {
       items = items.filter((t) => t.type === 'expense' && !t.paid);
     } else if (statusFilter === 'paid') {
       items = items.filter((t) => t.type === 'expense' && t.paid);
     }
 
-    // Filtro por tipo
-    if (kindFilter === 'recurring') {
-      items = items.filter((t) => !!t.recurring_id);
-    } else if (kindFilter === 'installment') {
-      items = items.filter((t) => !!t.installment_group_id && t.installment_total > 1);
+    // 3) Período
+    if (periodFilter !== 'all') {
+      const t0 = today();
+      items = items.filter((t) => {
+        const d = parseLocalDate(t.date);
+        if (!d) return false;
+        const diff = Math.floor((d - t0) / (1000 * 60 * 60 * 24));
+
+        switch (periodFilter) {
+          case 'today':
+            return diff === 0;
+          case 'next7':
+            return diff >= 0 && diff <= 7;
+          case 'next30':
+            return diff >= 0 && diff <= 30;
+          case 'overdue':
+            // Vencidas = despesa pendente com data passada
+            return t.type === 'expense' && !t.paid && diff < 0;
+          default:
+            return true;
+        }
+      });
     }
 
-    // Ordenação
-    items.sort((a, b) => {
-      switch (sortBy) {
-        case 'date_desc':
-          return new Date(b.date) - new Date(a.date);
-        case 'date_asc':
-          return new Date(a.date) - new Date(b.date);
-        case 'amount_desc':
-          return Number(b.amount) - Number(a.amount);
-        case 'amount_asc':
-          return Number(a.amount) - Number(b.amount);
-        case 'due':
-        default: {
-          // Despesas pendentes 1º (ordenadas por data crescente),
-          // depois receitas/pagas (mais recentes 1º)
-          const aPending = a.type === 'expense' && !a.paid;
-          const bPending = b.type === 'expense' && !b.paid;
-          if (aPending && !bPending) return -1;
-          if (!aPending && bPending) return 1;
-          if (aPending && bPending) return new Date(a.date) - new Date(b.date);
-          return new Date(b.date) - new Date(a.date);
-        }
+    // 4) Categoria
+    if (categoryFilter !== 'all') {
+      items = items.filter((t) => t.category?.id === categoryFilter);
+    }
+
+    // 5) Cartão
+    if (cardFilter !== 'all') {
+      if (cardFilter === 'cash') {
+        items = items.filter((t) => !t.credit_card_id);
+      } else {
+        items = items.filter((t) => t.credit_card_id === cardFilter);
       }
+    }
+
+    // 6) Faixa de valor
+    const minV = parseAmount(minAmount);
+    const maxV = parseAmount(maxAmount);
+    if (minV > 0) items = items.filter((t) => Number(t.amount) >= minV);
+    if (maxV > 0) items = items.filter((t) => Number(t.amount) <= maxV);
+
+    // ─────────────────────────────────────────────────────
+    // ORDENAÇÃO HIERÁRQUICA POR VENCIMENTO (o pedido principal)
+    // 1º despesas pendentes (mais próximas de vencer no topo)
+    // 2º receitas (mais recentes 1º)
+    // 3º despesas pagas (mais recentes 1º — caem pro fundo)
+    // ─────────────────────────────────────────────────────
+    items.sort((a, b) => {
+      const aBucket = a.type === 'expense'
+        ? (a.paid ? 2 : 0) // pendente=0, paga=2
+        : 1;               // receita=1
+      const bBucket = b.type === 'expense'
+        ? (b.paid ? 2 : 0)
+        : 1;
+
+      if (aBucket !== bBucket) return aBucket - bBucket;
+
+      const aDate = new Date(a.date);
+      const bDate = new Date(b.date);
+
+      if (aBucket === 0) {
+        // Pendentes: vencem primeiro = sobem
+        return aDate - bDate;
+      }
+      // Receitas e pagas: mais recentes primeiro
+      return bDate - aDate;
     });
 
     return items;
-  }, [rawItems, statusFilter, kindFilter, sortBy]);
+  }, [rawItems, searchTerm, statusFilter, periodFilter, categoryFilter, cardFilter, minAmount, maxAmount]);
 
-  // Conta pendentes pra mostrar badge no chip
+  // Conta pendentes (pra badge)
   const pendingCount = useMemo(
     () => rawItems.filter((t) => t.type === 'expense' && !t.paid).length,
     [rawItems]
   );
+
+  // Detecta filtros ativos (pra mostrar botão "Limpar")
+  const hasActiveFilters =
+    searchTerm.trim() ||
+    statusFilter !== 'all' ||
+    periodFilter !== 'all' ||
+    categoryFilter !== 'all' ||
+    cardFilter !== 'all' ||
+    minAmount ||
+    maxAmount;
+
+  function clearAllFilters() {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setPeriodFilter('all');
+    setCategoryFilter('all');
+    setCardFilter('all');
+    setMinAmount('');
+    setMaxAmount('');
+  }
 
   if (loading && !data) {
     return (
@@ -134,13 +237,10 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4 md:space-y-6">
-      {/* Seletor de mês — controla todo o conteúdo */}
       <MonthSelector />
-
-      {/* Banner de instalação PWA (some quando instalado/dispensado) */}
       <InstallBanner />
 
-      {/* Stat cards COM alertas inline (sutis) */}
+      {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-5 stagger">
         <StatCard
           label="Saldo do mês"
@@ -168,7 +268,7 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Alertas — agora discretos: chips inline em vez de banners gritantes */}
+      {/* Alertas — chips discretos */}
       {hasAlerts && (
         <div className="flex flex-wrap items-center gap-2">
           {data.alerts.map((a, i) => {
@@ -238,32 +338,77 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Lista de transações com filtros inteligentes */}
+      {/* ────────────────────────────────────────────────────── */}
+      {/*                    LISTA + FILTROS                       */}
+      {/* ────────────────────────────────────────────────────── */}
       <div className="space-y-3 md:space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="font-display text-xl md:text-2xl font-bold tracking-tight">
             Transações de {monthLabel}
             <span className="ml-2 text-sm font-mono font-medium text-ink-500">
-              ({filteredItems.length})
+              ({filteredItems.length}{filteredItems.length !== rawItems.length && ` de ${rawItems.length}`})
             </span>
           </h3>
+          {hasActiveFilters && (
+            <button
+              onClick={clearAllFilters}
+              className="text-xs font-bold uppercase tracking-widest text-negative hover:text-red-700 underline underline-offset-4 decoration-2 transition-colors"
+            >
+              Limpar filtros
+            </button>
+          )}
         </div>
 
-        {/* Filtros — chips horizontais */}
-        <div className="card-flat p-3 md:p-4 space-y-3">
-          {/* Status (despesas) */}
+        {/* Bloco de filtros */}
+        <div className="card-flat p-4 md:p-5 space-y-3">
+          {/* Busca + chip de status sempre visíveis */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
+              <input
+                type="search"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Buscar descrição ou categoria…"
+                className="input-field !min-h-[42px] !py-2 pl-10 pr-10"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center text-ink-400 hover:text-ink-900 hover:bg-ink-100 rounded-lg transition-colors"
+                  aria-label="Limpar busca"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            <button
+              onClick={() => setShowAdvanced((v) => !v)}
+              className={`inline-flex items-center justify-center gap-2 px-4 py-2 min-h-[42px] rounded-xl font-semibold text-sm transition-all duration-200 ${
+                showAdvanced
+                  ? 'bg-gradient-dark text-white shadow-soft'
+                  : 'bg-ink-100 text-ink-700 hover:bg-ink-200'
+              }`}
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              <span>Filtros</span>
+              {hasActiveFilters && !showAdvanced && (
+                <span className="w-2 h-2 rounded-full bg-accent" />
+              )}
+            </button>
+          </div>
+
+          {/* Status — sempre visível (chips horizontais) */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] uppercase tracking-widest font-bold text-ink-500 flex items-center gap-1 mr-1">
-              <Filter className="w-3 h-3" /> Status
-            </span>
-            {STATUS_FILTERS.map(({ id, label, icon: Icon }) => {
+            {STATUS_OPTIONS.map(({ id, label, icon: Icon }) => {
               const active = statusFilter === id;
               const showBadge = id === 'pending' && pendingCount > 0;
               return (
                 <button
                   key={id}
                   onClick={() => setStatusFilter(id)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all duration-200 ${
                     active
                       ? 'bg-gradient-dark text-white shadow-soft'
                       : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
@@ -283,45 +428,102 @@ export default function Dashboard() {
             })}
           </div>
 
-          {/* Tipo */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] uppercase tracking-widest font-bold text-ink-500 flex items-center gap-1 mr-1">
-              <Filter className="w-3 h-3" /> Tipo
-            </span>
-            {KIND_FILTERS.map(({ id, label, icon: Icon }) => {
-              const active = kindFilter === id;
-              return (
-                <button
-                  key={id}
-                  onClick={() => setKindFilter(id)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
-                    active
-                      ? 'bg-gradient-dark text-white shadow-soft'
-                      : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
-                  }`}
-                >
-                  {Icon && <Icon className="w-3.5 h-3.5" />}
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          {/* Filtros avançados (expansível) */}
+          {showAdvanced && (
+            <div className="pt-3 border-t border-ink-100 space-y-4 animate-fade-in">
+              {/* Período */}
+              <div>
+                <p className="text-[10px] uppercase tracking-widest font-bold text-ink-500 mb-2 flex items-center gap-1">
+                  <CalIcon className="w-3 h-3" /> Período
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {PERIOD_OPTIONS.map(({ id, label }) => {
+                    const active = periodFilter === id;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => setPeriodFilter(id)}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
+                          active
+                            ? 'bg-gradient-dark text-white shadow-soft'
+                            : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
-          {/* Ordenação */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] uppercase tracking-widest font-bold text-ink-500 flex items-center gap-1 mr-1">
-              <ArrowUpDown className="w-3 h-3" /> Ordem
-            </span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="px-3 py-1.5 min-h-[32px] bg-ink-100 hover:bg-ink-200 text-xs font-semibold rounded-full border-0 focus:outline-none focus:ring-2 focus:ring-ink-900 cursor-pointer transition-colors"
-            >
-              {SORT_OPTIONS.map((o) => (
-                <option key={o.id} value={o.id}>{o.label}</option>
-              ))}
-            </select>
-          </div>
+              {/* Categoria + Cartão lado a lado */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink-500 mb-1.5 flex items-center gap-1">
+                    <Tag className="w-3 h-3" /> Categoria
+                  </label>
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value)}
+                    className="input-field !min-h-[40px] !py-2"
+                  >
+                    <option value="all">Todas as categorias</option>
+                    {categoriesByUsage.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink-500 mb-1.5 flex items-center gap-1">
+                    <CardIcon className="w-3 h-3" /> Forma de pagamento
+                  </label>
+                  <select
+                    value={cardFilter}
+                    onChange={(e) => setCardFilter(e.target.value)}
+                    className="input-field !min-h-[40px] !py-2"
+                  >
+                    <option value="all">Todas</option>
+                    <option value="cash">Conta / dinheiro</option>
+                    {cards.map((c) => (
+                      <option key={c.id} value={c.id}>💳 {c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Faixa de valor */}
+              <div>
+                <p className="text-[10px] uppercase tracking-widest font-bold text-ink-500 mb-1.5">
+                  Faixa de valor
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-ink-500 font-mono pointer-events-none">De R$</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={minAmount}
+                      onChange={(e) => setMinAmount(e.target.value)}
+                      placeholder="0,00"
+                      className="input-field !min-h-[40px] !py-2 pl-14 font-mono text-right"
+                    />
+                  </div>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-ink-500 font-mono pointer-events-none">Até R$</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={maxAmount}
+                      onChange={(e) => setMaxAmount(e.target.value)}
+                      placeholder="0,00"
+                      className="input-field !min-h-[40px] !py-2 pl-14 font-mono text-right"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <TransactionList
@@ -334,7 +536,7 @@ export default function Dashboard() {
           }}
           onTogglePaid={togglePaidTx}
           emptyMessage={
-            statusFilter !== 'all' || kindFilter !== 'all'
+            hasActiveFilters
               ? 'Nenhuma transação corresponde aos filtros aplicados.'
               : `Nenhuma transação em ${monthLabel}. Use o botão "+" para adicionar.`
           }
