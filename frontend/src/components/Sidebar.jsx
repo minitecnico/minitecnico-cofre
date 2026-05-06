@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, ArrowDownCircle, ArrowUpCircle, CreditCard, Tag, LogOut, Wallet, Repeat, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import AlertCenter from './AlertCenter';
 
 const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -23,13 +24,19 @@ export default function Sidebar() {
     <aside className="hidden md:flex w-60 lg:w-64 min-h-screen bg-gradient-dark text-ink-50 flex-col sticky top-0 shadow-soft-lg">
       {/* Logo */}
       <div className="p-6 lg:p-7">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 lg:w-11 lg:h-11 bg-gradient-accent rounded-xl flex items-center justify-center shadow-soft-md flex-shrink-0">
-            <Wallet className="w-5 h-5 text-ink-900" strokeWidth={2.5} />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 lg:w-11 lg:h-11 bg-gradient-accent rounded-xl flex items-center justify-center shadow-soft-md flex-shrink-0">
+              <Wallet className="w-5 h-5 text-ink-900" strokeWidth={2.5} />
+            </div>
+            <h1 className="font-display text-2xl lg:text-3xl font-bold leading-none tracking-tight">
+              Cofre
+            </h1>
           </div>
-          <h1 className="font-display text-2xl lg:text-3xl font-bold leading-none tracking-tight">
-            Cofre
-          </h1>
+          {/* Sino de alertas — text-ink-50 pra adaptar à sidebar escura */}
+          <div className="text-ink-50 flex-shrink-0">
+            <AlertCenter variant="sidebar" />
+          </div>
         </div>
       </div>
 
