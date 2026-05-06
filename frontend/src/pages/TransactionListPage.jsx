@@ -23,14 +23,42 @@ export default function TransactionListPage({ type = 'income' }) {
   });
 
   // Busca client-side: descrição + categoria
+  // Aplica busca + ORDENAÇÃO HIERÁRQUICA POR VENCIMENTO:
+  //   1º Despesas pendentes (mais próximas de vencer no topo)
+  //   2º Receitas (mais recentes 1º)
+  //   3º Despesas pagas (mais recentes 1º — caem pro fundo)
+  // Quando o usuário marca uma despesa como paga, ela MIGRA pro fundo
+  // automaticamente (re-renderização instantânea).
   const filteredItems = useMemo(() => {
-    if (!searchTerm.trim()) return items;
-    const q = searchTerm.toLowerCase().trim();
-    return items.filter((t) => {
-      const desc = (t.description || '').toLowerCase();
-      const catName = (t.category?.name || '').toLowerCase();
-      return desc.includes(q) || catName.includes(q);
+    let result = [...items];
+
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase().trim();
+      result = result.filter((t) => {
+        const desc = (t.description || '').toLowerCase();
+        const catName = (t.category?.name || '').toLowerCase();
+        return desc.includes(q) || catName.includes(q);
+      });
+    }
+
+    // Hierarquia: pendente=0 (sobe), receita=1, paga=2 (desce)
+    result.sort((a, b) => {
+      const aBucket = a.type === 'expense' ? (a.paid ? 2 : 0) : 1;
+      const bBucket = b.type === 'expense' ? (b.paid ? 2 : 0) : 1;
+      if (aBucket !== bBucket) return aBucket - bBucket;
+
+      const aDate = new Date(a.date);
+      const bDate = new Date(b.date);
+
+      if (aBucket === 0) {
+        // Pendentes: vencem primeiro = sobem (data crescente)
+        return aDate - bDate;
+      }
+      // Receitas e pagas: mais recentes primeiro
+      return bDate - aDate;
     });
+
+    return result;
   }, [items, searchTerm]);
 
   const totalAmount = filteredItems.reduce((s, t) => s + Number(t.amount), 0);

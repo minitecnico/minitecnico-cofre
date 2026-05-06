@@ -359,6 +359,63 @@ export default function Dashboard() {
           )}
         </div>
 
+        {/* Chips de filtros ATIVOS — feedback visual instantâneo, com X pra remover */}
+        {hasActiveFilters && (
+          <div className="flex flex-wrap gap-2 animate-fade-in">
+            {searchTerm.trim() && (
+              <ActiveFilterChip
+                label={`"${searchTerm.trim()}"`}
+                icon={Search}
+                onRemove={() => setSearchTerm('')}
+              />
+            )}
+            {statusFilter !== 'all' && (
+              <ActiveFilterChip
+                label={STATUS_OPTIONS.find((s) => s.id === statusFilter)?.label || statusFilter}
+                icon={statusFilter === 'pending' ? Clock : Check}
+                onRemove={() => setStatusFilter('all')}
+              />
+            )}
+            {periodFilter !== 'all' && (
+              <ActiveFilterChip
+                label={PERIOD_OPTIONS.find((p) => p.id === periodFilter)?.label || periodFilter}
+                icon={CalIcon}
+                onRemove={() => setPeriodFilter('all')}
+              />
+            )}
+            {categoryFilter !== 'all' && (
+              <ActiveFilterChip
+                label={categories.find((c) => c.id === categoryFilter)?.name || 'Categoria'}
+                icon={Tag}
+                onRemove={() => setCategoryFilter('all')}
+              />
+            )}
+            {cardFilter !== 'all' && (
+              <ActiveFilterChip
+                label={
+                  cardFilter === 'cash'
+                    ? 'Conta / dinheiro'
+                    : cards.find((c) => c.id === cardFilter)?.name || 'Cartão'
+                }
+                icon={CardIcon}
+                onRemove={() => setCardFilter('all')}
+              />
+            )}
+            {(minAmount || maxAmount) && (
+              <ActiveFilterChip
+                label={
+                  minAmount && maxAmount
+                    ? `R$ ${minAmount} – ${maxAmount}`
+                    : minAmount
+                      ? `≥ R$ ${minAmount}`
+                      : `≤ R$ ${maxAmount}`
+                }
+                onRemove={() => { setMinAmount(''); setMaxAmount(''); }}
+              />
+            )}
+          </div>
+        )}
+
         {/* Bloco de filtros */}
         <div className="card-flat p-4 md:p-5 space-y-3">
           {/* Busca + chip de status sempre visíveis */}
@@ -543,5 +600,25 @@ export default function Dashboard() {
         />
       </div>
     </div>
+  );
+}
+
+/**
+ * Chip de filtro ativo: mostra o valor do filtro com botão X para remover.
+ * Usado no topo da lista pra dar feedback visual instantâneo.
+ */
+function ActiveFilterChip({ label, icon: Icon, onRemove }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-accent/30 text-ink-900 border border-ink-900/20 shadow-soft">
+      {Icon && <Icon className="w-3.5 h-3.5 flex-shrink-0" strokeWidth={2.5} />}
+      <span className="max-w-[200px] truncate">{label}</span>
+      <button
+        onClick={onRemove}
+        className="w-4 h-4 rounded-full bg-ink-900/15 hover:bg-ink-900 hover:text-white flex items-center justify-center flex-shrink-0 transition-all duration-200"
+        aria-label="Remover filtro"
+      >
+        <X className="w-3 h-3" strokeWidth={3} />
+      </button>
+    </span>
   );
 }

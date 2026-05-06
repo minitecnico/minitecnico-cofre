@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { transactionService } from './index';
+import * as XLSX from 'xlsx';
 
 /**
  * Service de Importação/Exportação de planilhas CSV.
@@ -611,6 +612,262 @@ export function downloadCSV(content, filename) {
   // BOM UTF-8 pra Excel abrir com acentos certos
   const BOM = '\uFEFF';
   const blob = new Blob([BOM + content], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// =========================================================================
+// EXCEL (.xlsx) — formato preferido (templates bonitos, dropdowns, etc.)
+// =========================================================================
+
+/** Helper: converte um array de arrays em uma worksheet com larguras de coluna. */
+function arraysToSheet(data, columnWidths) {
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  if (columnWidths) {
+    ws['!cols'] = columnWidths.map((w) => ({ wch: w }));
+  }
+  return ws;
+}
+
+/** Aplica formatação básica nos cabeçalhos (negrito + fundo verde-limão). */
+function applyHeaderStyle(ws, range) {
+  // SheetJS Community não suporta estilos completos sem biblioteca paga.
+  // Mas formatação numérica (datas, moeda) FUNCIONA — é o mais importante pra usabilidade.
+  // Para datas em pt-BR e moeda, definimos `z` (number format) nas células.
+}
+
+/**
+ * Gera o template Excel com 3 abas:
+ *   - Transações (principal, com exemplos e formatação de data/valor)
+ *   - Categorias (lista pra consulta)
+ *   - Cartões (lista pra consulta)
+ *
+ * NOTA: dropdowns reais via "data validation" requerem biblioteca paga
+ * do XLSX. Como alternativa, listamos as categorias/cartões em abas
+ * separadas para fácil consulta. O parser do upload usa fuzzy matching,
+ * então mesmo se o usuário digitar "alimentacao" no lugar de "Alimentação"
+ * (ou abrir as abas e copiar/colar), tudo funciona.
+ */
+export async function generateTemplateXLSX() {
+  // Busca categorias e cartões pra incluir nas abas auxiliares
+  const [catsRes, cardsRes] = await Promise.all([
+    supabase.from('categories').select('name, type, color').order('name'),
+    supabase.from('credit_cards').select('name, brand, last_digits').eq('active', true).order('name'),
+  ]);
+
+  const cats = catsRes.data || [];
+  const cards = cardsRes.data || [];
+
+  // ── Aba 1: Transações (com exemplos) ──────────────────────────────────
+  const today = new Date();
+  const txData = [
+    // Cabeçalho
+    ['Tipo', 'Descrição', 'Valor', 'Data', 'Categoria', 'Cartão', 'Parcelas', 'Pago', 'Observações'],
+    // Exemplos (3 linhas)
+    ['Despesa', 'Aluguel',     1800.00, today, 'Moradia',    '',        1, 'Não', 'Pago via PIX'],
+    ['Despesa', 'Tênis novo',  300.00,  today, 'Vestuário',  'Nubank',  8, 'Não', 'Black Friday'],
+    ['Receita', 'Salário',     5000.00, today, 'Trabalho',   '',        1, 'Sim', ''],
+  ];
+
+  // 7 linhas vazias pra usuário começar
+  for (let i = 0; i < 7; i++) {
+    txData.push(['', '', '', '', '', '', '', '', '']);
+  }
+
+  const wsTx = arraysToSheet(txData, [12, 30, 14, 14, 22, 18, 10, 10, 30]);
+
+  // Formatação numérica/data nas colunas de exemplo
+  // Coluna C (Valor) = moeda BR
+  // Coluna D (Data) = data BR
+  for (let r = 1; r <= 9; r++) { // linhas 2-10 (1-indexed → 1-9 zero-indexed)
+    const cellValor = XLSX.utils.encode_cell({ r, c: 2 });
+    const cellData = XLSX.utils.encode_cell({ r, c: 3 });
+    if (wsTx[cellValor]) wsTx[cellValor].z = '#,##0.00';
+    if (wsTx[cellData]) wsTx[cellData].z = 'dd/mm/yyyy';
+  }
+
+  // ── Aba 2: Categorias disponíveis ─────────────────────────────────────
+  const catData = [
+    ['Categoria', 'Tipo'],
+    ...cats.map((c) => [c.name, c.type === 'income' ? 'Receita' : 'Despesa']),
+  ];
+  const wsCats = arraysToSheet(catData, [25, 12]);
+
+  // ── Aba 3: Cartões disponíveis ────────────────────────────────────────
+  const cardData = [
+    ['Cartão', 'Bandeira', 'Final'],
+    ...cards.map((c) => [c.name, c.brand || '', c.last_digits || '']),
+  ];
+  const wsCards = arraysToSheet(cardData, [22, 14, 8]);
+
+  // ── Aba 4: Como preencher (instruções) ────────────────────────────────
+  const helpData = [
+    ['Como preencher esta planilha'],
+    [''],
+    ['Coluna', 'Como preencher', 'Exemplo'],
+    ['Tipo', 'Despesa ou Receita (também aceita Saída/Entrada)', 'Despesa'],
+    ['Descrição', 'O que foi gasto/recebido', 'Aluguel'],
+    ['Valor', 'Use vírgula nos centavos', '1800,00'],
+    ['Data', 'Formato BR (dd/mm/aaaa) ou ISO (aaaa-mm-dd)', '04/05/2026'],
+    ['Categoria', 'Nome da categoria já cadastrada (veja aba "Categorias")', 'Moradia'],
+    ['Cartão', 'Nome do cartão (veja aba "Cartões"), ou vazio para conta/dinheiro', 'Nubank'],
+    ['Parcelas', '1 ou vazio = à vista. 8 = 8x. (Apenas com cartão.)', '8'],
+    ['Pago', 'Sim se já paga, Não ou vazio se pendente', 'Não'],
+    ['Observações', 'Texto livre', 'Pago via PIX'],
+    [''],
+    ['DICAS:'],
+    ['• Sistema aceita nomes aproximados (ex: "nubank" ou "nu" → "Nubank")'],
+    ['• Sempre tem um preview antes de importar — você confere tudo'],
+    ['• Duplicatas (mesma data + descrição + valor) são detectadas automaticamente'],
+    ['• Apague as linhas de exemplo antes de subir!'],
+  ];
+  const wsHelp = arraysToSheet(helpData, [16, 50, 24]);
+
+  // ── Monta o workbook ──────────────────────────────────────────────────
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsTx, 'Transações');
+  XLSX.utils.book_append_sheet(wb, wsCats, 'Categorias');
+  XLSX.utils.book_append_sheet(wb, wsCards, 'Cartões');
+  XLSX.utils.book_append_sheet(wb, wsHelp, 'Como preencher');
+
+  // Gera o arquivo binário (ArrayBuffer)
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+/**
+ * Exporta as transações (do mês ou todas) como Excel.
+ * @param {Object} options - { startDate, endDate } opcionais
+ */
+export async function exportTransactionsXLSX({ startDate, endDate } = {}) {
+  let query = supabase
+    .from('transactions')
+    .select(`*, category:categories(name), credit_card:credit_cards(name)`)
+    .order('date', { ascending: false });
+
+  if (startDate) query = query.gte('date', startDate);
+  if (endDate) query = query.lte('date', endDate);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const rows = [
+    ['Tipo', 'Descrição', 'Valor', 'Data', 'Categoria', 'Cartão', 'Parcelas', 'Pago', 'Observações'],
+  ];
+
+  for (const t of data || []) {
+    const tipo = t.type === 'income' ? 'Receita' : 'Despesa';
+    const valor = Number(t.amount);
+    // Converte string ISO em Date (timezone local pra evitar shift)
+    let dateObj = '';
+    if (t.date) {
+      const [y, m, d] = t.date.slice(0, 10).split('-').map(Number);
+      dateObj = new Date(y, m - 1, d);
+    }
+    const categoria = t.category?.name || '';
+    const cartao = t.credit_card?.name || '';
+    const parcelas = t.installment_total > 1
+      ? `${t.installment_number}/${t.installment_total}`
+      : '1';
+    const pago = t.paid ? 'Sim' : 'Não';
+    const obs = t.notes || '';
+
+    rows.push([tipo, t.description || '', valor, dateObj, categoria, cartao, parcelas, pago, obs]);
+  }
+
+  const ws = arraysToSheet(rows, [12, 30, 14, 14, 22, 18, 10, 10, 30]);
+
+  // Formatação numérica
+  for (let r = 1; r < rows.length; r++) {
+    const cellValor = XLSX.utils.encode_cell({ r, c: 2 });
+    const cellData = XLSX.utils.encode_cell({ r, c: 3 });
+    if (ws[cellValor]) ws[cellValor].z = '#,##0.00';
+    if (ws[cellData]) ws[cellData].z = 'dd/mm/yyyy';
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Transações');
+
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    blob: new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    count: data?.length || 0,
+  };
+}
+
+/**
+ * Lê um arquivo Excel/CSV e devolve as linhas como arrays de strings,
+ * pra reutilizar a mesma lógica de validação que já existe em parseImportCSV.
+ *
+ * Aceita .xlsx, .xls e .csv automaticamente.
+ */
+async function readSpreadsheetFile(file) {
+  const buffer = await file.arrayBuffer();
+  const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+
+  // Procura a aba "Transações" — se não existir, usa a primeira
+  const sheetName = wb.SheetNames.find((n) => /transac/i.test(n)) || wb.SheetNames[0];
+  if (!sheetName) throw new Error('Arquivo sem abas válidas.');
+
+  const ws = wb.Sheets[sheetName];
+
+  // Converte para array de arrays. raw=false converte datas/números para string,
+  // mas vamos reconverter manualmente o que precisar
+  const rows = XLSX.utils.sheet_to_json(ws, {
+    header: 1,
+    defval: '',
+    raw: false, // datas viram string formatada
+    dateNF: 'dd/mm/yyyy',
+    blankrows: false,
+  });
+
+  // Cada linha vira array de strings (já é assim, mas garantimos)
+  return rows.map((row) =>
+    (Array.isArray(row) ? row : []).map((cell) =>
+      cell == null ? '' : String(cell)
+    )
+  );
+}
+
+/**
+ * Parseia um arquivo (.xlsx, .xls ou .csv) e retorna preview com validação.
+ * Reaproveita TODA a lógica de parseImportCSV — apenas troca a leitura inicial.
+ */
+export async function parseImportSpreadsheet(file, ctx) {
+  const isCSV = /\.csv$/i.test(file.name);
+
+  if (isCSV) {
+    // CSV: usa o caminho antigo (já existente)
+    const text = await file.text();
+    return parseImportCSV(text, ctx);
+  }
+
+  // Excel: lê com xlsx, depois reaproveita a validação convertendo
+  // o array de arrays em CSV-like (joinando com vírgula com escape correto)
+  const rows = await readSpreadsheetFile(file);
+
+  // Filtra linhas vazias e linhas que começam com #
+  const cleanRows = rows.filter((row) => {
+    const first = (row[0] || '').trim();
+    return row.some((c) => (c || '').trim() !== '') && !first.startsWith('#');
+  });
+
+  // Reconstrói como CSV pra reutilizar parseImportCSV (que já valida tudo)
+  const csvText = cleanRows
+    .map((row) => row.map(csvEscape).join(','))
+    .join('\n');
+
+  return parseImportCSV(csvText, ctx);
+}
+
+/** Helper pra disparar download de Blob como arquivo. */
+export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;

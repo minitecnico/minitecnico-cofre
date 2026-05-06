@@ -5,12 +5,12 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
-  generateTemplateCSV,
-  exportTransactionsCSV,
-  parseImportCSV,
+  generateTemplateXLSX,
+  exportTransactionsXLSX,
+  parseImportSpreadsheet,
   importValidRows,
   loadImportContext,
-  downloadCSV,
+  downloadBlob,
 } from '../services/importExport';
 import { useMonth } from '../context/MonthContext';
 import { formatCurrency } from '../utils/format';
@@ -39,13 +39,16 @@ export default function ImportExport() {
   // ─────────────────────────────────────────────────────
   // Ações de DOWNLOAD
   // ─────────────────────────────────────────────────────
-  function handleDownloadTemplate() {
+  async function handleDownloadTemplate() {
     setExportingTemplate(true);
+    setError(null);
     try {
-      const csv = generateTemplateCSV();
-      downloadCSV(csv, 'cofre-modelo-importacao.csv');
+      const blob = await generateTemplateXLSX();
+      downloadBlob(blob, 'cofre-modelo-importacao.xlsx');
+    } catch (err) {
+      setError({ kind: 'error', text: 'Erro ao gerar modelo: ' + err.message });
     } finally {
-      setTimeout(() => setExportingTemplate(false), 500);
+      setExportingTemplate(false);
     }
   }
 
@@ -53,8 +56,8 @@ export default function ImportExport() {
     setExportingMonth(true);
     setError(null);
     try {
-      const { csv, count } = await exportTransactionsCSV({ startDate, endDate });
-      downloadCSV(csv, `cofre-${month}.csv`);
+      const { blob, count } = await exportTransactionsXLSX({ startDate, endDate });
+      downloadBlob(blob, `cofre-${month}.xlsx`);
       if (count === 0) {
         setError({ kind: 'info', text: 'Nenhuma transação no mês — arquivo gerado com cabeçalho apenas.' });
       }
@@ -69,9 +72,9 @@ export default function ImportExport() {
     setExportingAll(true);
     setError(null);
     try {
-      const { csv } = await exportTransactionsCSV();
+      const { blob } = await exportTransactionsXLSX();
       const today = new Date().toISOString().slice(0, 10);
-      downloadCSV(csv, `cofre-completo-${today}.csv`);
+      downloadBlob(blob, `cofre-completo-${today}.xlsx`);
     } catch (err) {
       setError({ kind: 'error', text: 'Erro ao exportar: ' + err.message });
     } finally {
@@ -91,16 +94,14 @@ export default function ImportExport() {
     setPreview(null);
 
     try {
-      const text = await file.text();
       const ctx = await loadImportContext();
-      const result = await parseImportCSV(text, ctx);
+      const result = await parseImportSpreadsheet(file, ctx);
       setPreview(result);
       setImportStep('preview');
     } catch (err) {
       setError({ kind: 'error', text: err.message || 'Não foi possível ler o arquivo.' });
       setImportStep('idle');
     } finally {
-      // Limpa input pra permitir reupload do mesmo arquivo
       if (fileRef.current) fileRef.current.value = '';
     }
   }
@@ -171,8 +172,8 @@ export default function ImportExport() {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <ActionCard
-                title="Modelo em branco"
-                description="Planilha vazia com os cabeçalhos certos. Preencha no Excel e suba aqui."
+                title="Modelo Excel"
+                description="Planilha .xlsx com cabeçalhos certos, suas categorias e cartões em abas separadas."
                 icon={FileText}
                 buttonLabel={exportingTemplate ? 'Gerando…' : 'Baixar modelo'}
                 onClick={handleDownloadTemplate}
@@ -181,7 +182,7 @@ export default function ImportExport() {
               />
               <ActionCard
                 title={`Transações de ${label}`}
-                description="Exporta apenas o mês selecionado, com tudo já preenchido."
+                description="Exporta apenas o mês selecionado como Excel, com tudo já preenchido."
                 icon={Download}
                 buttonLabel={exportingMonth ? 'Exportando…' : 'Baixar mês'}
                 onClick={handleExportMonth}
@@ -189,7 +190,7 @@ export default function ImportExport() {
               />
               <ActionCard
                 title="Histórico completo"
-                description="Todas as transações já cadastradas. Útil pra backup."
+                description="Todas as transações já cadastradas em Excel. Útil pra backup."
                 icon={FileDown}
                 buttonLabel={exportingAll ? 'Exportando…' : 'Baixar tudo'}
                 onClick={handleExportAll}
@@ -214,9 +215,10 @@ export default function ImportExport() {
                     Como funciona
                   </h3>
                   <ul className="text-xs md:text-sm text-ink-600 mt-1 space-y-1 list-disc list-inside">
+                    <li><strong>Aceita Excel (.xlsx, .xls) e CSV</strong> — preferência por Excel pra evitar problemas com acentos</li>
                     <li><strong>Categorias e cartões</strong>: aceitamos nomes aproximados (ex: "alimentacao" vira "Alimentação")</li>
-                    <li><strong>Datas</strong>: aceitamos formato BR (04/05/2026) ou ISO (2026-05-04)</li>
-                    <li><strong>Parcelas</strong>: coluna "Parcelas" com 8 vai criar 8 transações automaticamente</li>
+                    <li><strong>Datas</strong>: formato BR (04/05/2026) ou ISO (2026-05-04). No Excel, use a coluna como Data mesmo</li>
+                    <li><strong>Parcelas</strong>: coluna "Parcelas" com 8 cria 8 transações automaticamente</li>
                     <li><strong>Duplicatas</strong>: se a mesma data + descrição + valor já existir, a linha é ignorada</li>
                     <li><strong>Preview antes de importar</strong>: você revisa tudo antes de confirmar</li>
                   </ul>
@@ -226,7 +228,7 @@ export default function ImportExport() {
               <input
                 ref={fileRef}
                 type="file"
-                accept=".csv,text/csv"
+                accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
                 onChange={handleFileSelected}
                 className="hidden"
               />
@@ -237,9 +239,9 @@ export default function ImportExport() {
               >
                 <Upload className="w-7 h-7" strokeWidth={2.25} />
                 <div>
-                  <p className="font-bold text-base">Clique para escolher um arquivo CSV</p>
+                  <p className="font-bold text-base">Clique para escolher um arquivo</p>
                   <p className="text-xs text-ink-500 mt-0.5 font-medium">
-                    Ou arraste e solte aqui (em breve)
+                    Aceita Excel (.xlsx, .xls) ou CSV
                   </p>
                 </div>
               </button>
