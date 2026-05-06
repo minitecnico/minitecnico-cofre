@@ -146,23 +146,108 @@ function csvEscape(value) {
   return s;
 }
 
-/** Parse de valor monetário: aceita "1.234,56" e "1234.56". */
+/** Parse de valor monetário.
+ * --------------------------------------------------------------
+ * Aceita:
+ *   - number direto: 1234.56 → 1234.56  (caso vindo de planilha Excel raw)
+ *   - "1.234,56" (BR)                   → 1234.56
+ *   - "1234,56"  (BR sem milhar)        → 1234.56
+ *   - "1234.56"  (US sem milhar)        → 1234.56
+ *   - "R$ 1.234,56"                     → 1234.56
+ *
+ * Heurística para strings ambíguas (com vírgula E ponto):
+ *   - O ÚLTIMO separador (mais à direita) é o decimal
+ *   - O outro é separador de milhar (sempre removido)
+ *
+ * Estratégia para strings com APENAS UM tipo de separador:
+ *   - Se o separador aparece UMA vez E tem 1-2 dígitos depois → é decimal
+ *   - Se o separador aparece UMA vez E tem 3 dígitos depois → é MILHAR (não decimal)
+ *   - Se o separador aparece MAIS DE UMA vez → é separador de milhar
+ *
+ * Exemplos críticos da heurística:
+ *   "1.234"      → 1234     (3 dígitos depois do ponto = milhar)
+ *   "1.23"       → 1.23     (2 dígitos depois do ponto = decimal)
+ *   "1,234"      → 1234     (3 dígitos depois da vírgula = milhar — formato US!)
+ *   "1,23"       → 1.23     (2 dígitos depois da vírgula = decimal — formato BR!)
+ *   "1.234.567"  → 1234567  (mais de uma ocorrência = milhar)
+ */
 function parseMoney(input) {
   if (input == null || input === '') return null;
-  const s = String(input).replace(/[^\d,.-]/g, '').trim();
+
+  // Se já é número, devolve direto (caso de Excel lido com raw:true)
+  if (typeof input === 'number') {
+    return isNaN(input) ? null : input;
+  }
+
+  let s = String(input).replace(/[^\d,.-]/g, '').trim();
   if (!s) return null;
-  // Heurística: se tem vírgula E ponto, vírgula é decimal; só ponto = decimal; só vírgula = decimal
+
+  // Trata negativo
+  let isNegative = false;
+  if (s.startsWith('-')) {
+    isNegative = true;
+    s = s.slice(1);
+  }
+  s = s.replace(/-/g, ''); // remove eventuais hífens do meio
+
+  const hasComma = s.includes(',');
+  const hasDot = s.includes('.');
+
   let normalized;
-  if (s.includes(',') && s.includes('.')) {
-    // Formato BR: "1.234,56" → último separador é decimal
-    normalized = s.replace(/\./g, '').replace(',', '.');
-  } else if (s.includes(',')) {
-    normalized = s.replace(',', '.');
+
+  if (hasComma && hasDot) {
+    // Tem AMBOS — o último (mais à direita) é o decimal
+    const lastComma = s.lastIndexOf(',');
+    const lastDot = s.lastIndexOf('.');
+    if (lastComma > lastDot) {
+      // Vírgula é decimal (formato BR): "1.234,56"
+      normalized = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Ponto é decimal (formato US): "1,234.56"
+      normalized = s.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    // Só vírgula
+    const parts = s.split(',');
+    if (parts.length > 2) {
+      // Múltiplas vírgulas = separador de milhar (formato US sem decimal)
+      normalized = s.replace(/,/g, '');
+    } else {
+      // Uma vírgula só: olha quantos dígitos vêm depois
+      const after = parts[1];
+      if (after.length === 3) {
+        // 3 dígitos = milhar (ex: "1,234" = 1234)
+        normalized = s.replace(',', '');
+      } else {
+        // 1 ou 2 dígitos = decimal (ex: "1,23" ou "1,5" = formato BR)
+        normalized = s.replace(',', '.');
+      }
+    }
+  } else if (hasDot) {
+    // Só ponto
+    const parts = s.split('.');
+    if (parts.length > 2) {
+      // Múltiplos pontos = separador de milhar (formato BR sem decimal)
+      normalized = s.replace(/\./g, '');
+    } else {
+      // Um ponto só
+      const after = parts[1];
+      if (after.length === 3) {
+        // 3 dígitos = milhar (ex: "1.234" = 1234, formato BR)
+        normalized = s.replace('.', '');
+      } else {
+        // 1 ou 2 dígitos = decimal (ex: "1.23" = 1.23)
+        normalized = s;
+      }
+    }
   } else {
+    // Sem separadores
     normalized = s;
   }
+
   const n = parseFloat(normalized);
-  return isNaN(n) ? null : n;
+  if (isNaN(n)) return null;
+  return isNegative ? -n : n;
 }
 
 /** Parse de data: aceita BR (DD/MM/YYYY ou DD/MM/YY) ou ISO (YYYY-MM-DD). */
@@ -802,10 +887,18 @@ export async function exportTransactionsXLSX({ startDate, endDate } = {}) {
 }
 
 /**
- * Lê um arquivo Excel/CSV e devolve as linhas como arrays de strings,
- * pra reutilizar a mesma lógica de validação que já existe em parseImportCSV.
+ * Lê um arquivo Excel/CSV e devolve as linhas em formato uniforme pra validação.
  *
- * Aceita .xlsx, .xls e .csv automaticamente.
+ * Estratégia para evitar ambiguidades de formato:
+ *   - Excel: usamos raw:true → números vêm como number, datas como Date
+ *   - Convertemos datas para string DD/MM/YYYY (formato BR esperado pelo parser)
+ *   - Mantemos números como number (parseMoney aceita number direto)
+ *   - Strings (texto livre) ficam como string
+ *
+ * Por que NÃO raw:false:
+ *   raw:false força XLSX a formatar números como string usando locale do JS
+ *   (geralmente US: "254,400.00") — o que confunde a heurística de parseMoney.
+ *   Com raw:true recebemos o valor numérico EXATO, sem ambiguidades.
  */
 async function readSpreadsheetFile(file) {
   const buffer = await file.arrayBuffer();
@@ -817,21 +910,44 @@ async function readSpreadsheetFile(file) {
 
   const ws = wb.Sheets[sheetName];
 
-  // Converte para array de arrays. raw=false converte datas/números para string,
-  // mas vamos reconverter manualmente o que precisar
+  // raw: true mantém números e datas em seus tipos nativos (sem string ambígua)
   const rows = XLSX.utils.sheet_to_json(ws, {
     header: 1,
     defval: '',
-    raw: false, // datas viram string formatada
-    dateNF: 'dd/mm/yyyy',
+    raw: true,
     blankrows: false,
   });
 
-  // Cada linha vira array de strings (já é assim, mas garantimos)
+  // Converte cada célula para string preservando o significado:
+  //   - Date     → "DD/MM/YYYY" (timezone-safe)
+  //   - number   → string com vírgula como decimal (formato BR)
+  //   - boolean  → "Sim"/"Não"
+  //   - resto    → String(cell)
   return rows.map((row) =>
-    (Array.isArray(row) ? row : []).map((cell) =>
-      cell == null ? '' : String(cell)
-    )
+    (Array.isArray(row) ? row : []).map((cell) => {
+      if (cell == null || cell === '') return '';
+
+      // Date object → string BR (sem timezone shift)
+      if (cell instanceof Date) {
+        const dd = String(cell.getDate()).padStart(2, '0');
+        const mm = String(cell.getMonth() + 1).padStart(2, '0');
+        const yyyy = cell.getFullYear();
+        return `${dd}/${mm}/${yyyy}`;
+      }
+
+      // Number → string em formato BR ("1234.56" → "1234,56")
+      // Importante: NÃO adicionamos separador de milhar pra não confundir o parser
+      if (typeof cell === 'number') {
+        return String(cell).replace('.', ',');
+      }
+
+      // Boolean (raro no Excel mas possível)
+      if (typeof cell === 'boolean') {
+        return cell ? 'Sim' : 'Não';
+      }
+
+      return String(cell);
+    })
   );
 }
 
