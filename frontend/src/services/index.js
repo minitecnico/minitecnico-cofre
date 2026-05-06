@@ -362,6 +362,7 @@ export const recurringService = {
         credit_card_id: payload.credit_card_id || null,
         day_of_month: payload.day_of_month,
         start_month: payload.start_month, // YYYY-MM-DD (dia 1 do mês de início)
+        kind: payload.kind || 'recurring', // 'recurring' | 'subscription'
         active: true,
       })
       .select(`*, category:categories(*), credit_card:credit_cards(*)`)

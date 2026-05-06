@@ -98,22 +98,31 @@ export default function AlertCenter({ variant = 'compact', onCloseSidebar }) {
         )}
       </button>
 
-      {/* Painel — desktop: dropdown / mobile: full sheet */}
+      {/* Painel — desktop: dropdown ancorado / mobile: sheet inferior */}
       {open && (
         <>
-          {/* Backdrop só no mobile (esconde no desktop) */}
+          {/* Backdrop só no mobile */}
           <div
-            className="fixed inset-0 bg-ink-900/30 backdrop-blur-sm z-40 md:hidden"
+            className="fixed inset-0 bg-ink-900/40 backdrop-blur-sm z-40 md:hidden"
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
 
+          {/*
+            Posicionamento:
+              MOBILE: fixed na base da tela ACIMA da BottomNav (que tem ~64px)
+                      Por isso bottom-16 — deixa a navegação inferior visível
+              DESKTOP: fixed ancorado no canto superior direito da viewport
+                      independente de onde o sino esteja
+          */}
           <div
             ref={panelRef}
-            className="fixed md:absolute right-0 top-auto md:top-12 left-0 md:left-auto bottom-0 md:bottom-auto
-                       w-full md:w-[400px] max-h-[80vh] md:max-h-[600px]
-                       bg-white md:rounded-2xl rounded-t-3xl shadow-soft-lg border-t md:border border-ink-200
-                       z-50 flex flex-col animate-fade-in overflow-hidden"
+            className="
+              fixed left-0 right-0 bottom-16 max-h-[75vh] rounded-3xl mx-2
+              md:fixed md:left-auto md:right-4 md:bottom-auto md:top-16 md:rounded-2xl md:w-[400px] md:max-h-[600px] md:mx-0
+              bg-white shadow-soft-lg border border-ink-200
+              z-50 flex flex-col animate-fade-in overflow-hidden
+            "
             role="dialog"
             aria-label="Notificações"
           >
@@ -248,11 +257,37 @@ function NotificationOptIn() {
   const [enabled, setEnabled] = useState(() => getNotificationsEnabled());
   const [hidden, setHidden] = useState(false);
 
-  // Não mostra se: api inexistente, permissão denied (não dá pra reverter no JS),
-  // já está habilitado, ou usuário fechou
-  if (perm === 'unsupported' || perm === 'denied') return null;
+  // Não mostra se: api inexistente, já habilitado, ou usuário fechou
+  if (perm === 'unsupported') return null;
   if (enabled) return null;
   if (hidden) return null;
+
+  // Permissão BLOQUEADA → mostra banner orientando o usuário a desbloquear no navegador
+  if (perm === 'denied') {
+    return (
+      <div className="px-4 py-3 bg-yellow-50 border-b border-warn/40">
+        <div className="flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg bg-warn/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <BellOff className="w-4 h-4 text-yellow-800" strokeWidth={2.25} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-bold text-sm text-yellow-900">Notificações bloqueadas</p>
+            <p className="text-xs text-yellow-800 mt-0.5 leading-snug">
+              Pra reativar, clique no cadeado 🔒 ao lado do endereço do site,
+              vá em "Notificações" e mude para "Permitir".
+            </p>
+          </div>
+          <button
+            onClick={() => setHidden(true)}
+            className="w-6 h-6 rounded-md hover:bg-yellow-200 flex items-center justify-center text-yellow-900 flex-shrink-0"
+            aria-label="Fechar"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   async function activate() {
     const result = await requestNotificationPermission();
