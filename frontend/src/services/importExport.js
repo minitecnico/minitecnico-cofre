@@ -1,0 +1,622 @@
+import { supabase } from './supabase';
+import { transactionService } from './index';
+
+/**
+ * Service de Importação/Exportação de planilhas CSV.
+ * --------------------------------------------------------------
+ * Esse módulo é ISOLADO — não modifica nenhum outro service. Usa as
+ * funções existentes (transactionService.create / createInstallments)
+ * para criar transações.
+ *
+ * Recursos:
+ *   - Geração de template CSV em branco (com cabeçalhos em PT-BR + exemplos)
+ *   - Export CSV das transações do mês selecionado (ou todas)
+ *   - Parse "tolerante" de CSV de upload, com fuzzy matching:
+ *      • Categoria por nome aproximado (ignora acentos, case)
+ *      • Cartão por nome aproximado
+ *      • Tipo aceita variações ("despesa", "saída", "expense", "-")
+ *      • Data aceita BR (DD/MM/YYYY) ou ISO (YYYY-MM-DD)
+ *      • Valor aceita "1.234,56" ou "1234.56"
+ *   - Detecção de duplicatas por (data + descrição + valor)
+ *   - Validação linha-a-linha com erros e avisos detalhados
+ *   - Importação atômica (só importa as linhas válidas)
+ */
+
+// ─────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Normaliza texto: minúsculas, sem acento, sem espaços extras. */
+function normalize(s) {
+  if (s == null) return '';
+  return String(s)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // remove acentos
+    .toLowerCase()
+    .trim();
+}
+
+/** Distância de edição (Levenshtein) — pra "mais parecido". */
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+/**
+ * Encontra o item mais "próximo" pelo nome.
+ * Retorna { item, exact } ou null se nenhuma proximidade razoável.
+ */
+function findClosest(query, items, getName) {
+  if (!query) return null;
+  const q = normalize(query);
+
+  // Match exato (após normalização) tem prioridade
+  for (const item of items) {
+    if (normalize(getName(item)) === q) return { item, exact: true };
+  }
+
+  // Match parcial: nome do item começa/contém a query (ou vice-versa)
+  for (const item of items) {
+    const n = normalize(getName(item));
+    if (n.startsWith(q) || q.startsWith(n) || n.includes(q) || q.includes(n)) {
+      return { item, exact: false };
+    }
+  }
+
+  // Fuzzy: distância de edição pequena (até 30% do tamanho)
+  let best = null;
+  let bestDist = Infinity;
+  for (const item of items) {
+    const n = normalize(getName(item));
+    const d = levenshtein(q, n);
+    if (d < bestDist) {
+      bestDist = d;
+      best = item;
+    }
+  }
+  if (best && bestDist <= Math.max(2, Math.floor(q.length * 0.3))) {
+    return { item: best, exact: false };
+  }
+
+  return null;
+}
+
+/** Parse CSV simples — suporta aspas duplas, vírgula como separador. */
+function parseCsvText(text) {
+  const lines = [];
+  let current = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"' && text[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cell += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',' || ch === ';') {
+        current.push(cell);
+        cell = '';
+      } else if (ch === '\n' || ch === '\r') {
+        if (cell !== '' || current.length > 0) {
+          current.push(cell);
+          lines.push(current);
+        }
+        cell = '';
+        current = [];
+        // pula \r\n
+        if (ch === '\r' && text[i + 1] === '\n') i++;
+      } else {
+        cell += ch;
+      }
+    }
+  }
+  if (cell !== '' || current.length > 0) {
+    current.push(cell);
+    lines.push(current);
+  }
+  return lines.filter((l) => l.some((c) => c.trim() !== ''));
+}
+
+/** Escape CSV: envolve em aspas se contém , ; " ou nova linha. */
+function csvEscape(value) {
+  if (value == null) return '';
+  const s = String(value);
+  if (/[",;\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+/** Parse de valor monetário: aceita "1.234,56" e "1234.56". */
+function parseMoney(input) {
+  if (input == null || input === '') return null;
+  const s = String(input).replace(/[^\d,.-]/g, '').trim();
+  if (!s) return null;
+  // Heurística: se tem vírgula E ponto, vírgula é decimal; só ponto = decimal; só vírgula = decimal
+  let normalized;
+  if (s.includes(',') && s.includes('.')) {
+    // Formato BR: "1.234,56" → último separador é decimal
+    normalized = s.replace(/\./g, '').replace(',', '.');
+  } else if (s.includes(',')) {
+    normalized = s.replace(',', '.');
+  } else {
+    normalized = s;
+  }
+  const n = parseFloat(normalized);
+  return isNaN(n) ? null : n;
+}
+
+/** Parse de data: aceita BR (DD/MM/YYYY ou DD/MM/YY) ou ISO (YYYY-MM-DD). */
+function parseDate(input) {
+  if (input == null || input === '') return null;
+  const s = String(input).trim();
+
+  // ISO: 2026-05-04 (com ou sem hora)
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${m[1]}-${m[2]}-${m[3]}`;
+    }
+    return null;
+  }
+
+  // BR: 04/05/2026, 4/5/26, 04-05-2026
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (m) {
+    let y = parseInt(m[3], 10);
+    if (y < 100) y += 2000;
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[1], 10);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
+/** Parse de tipo: aceita variações em PT-BR. */
+function parseType(input) {
+  const n = normalize(input);
+  if (!n) return null;
+  if (['despesa', 'saida', 'expense', '-', 'gasto', 'pagamento'].includes(n)) return 'expense';
+  if (['receita', 'entrada', 'income', '+', 'recebimento', 'salario'].includes(n)) return 'income';
+  return null;
+}
+
+/** Parse de booleano "sim/não" pra coluna "Pago". */
+function parseBool(input) {
+  const n = normalize(input);
+  if (['sim', 's', 'yes', 'y', '1', 'true', 'pago', 'paid'].includes(n)) return true;
+  if (['nao', 'n', 'no', '0', 'false', 'pendente', 'unpaid', ''].includes(n)) return false;
+  return false;
+}
+
+/** Mapa flexível de nome de coluna → chave canônica. */
+const COLUMN_ALIASES = {
+  tipo: 'type',
+  type: 'type',
+  descricao: 'description',
+  descrição: 'description',
+  description: 'description',
+  desc: 'description',
+  valor: 'amount',
+  amount: 'amount',
+  preco: 'amount',
+  preço: 'amount',
+  data: 'date',
+  date: 'date',
+  vencimento: 'date',
+  categoria: 'category',
+  category: 'category',
+  cartao: 'card',
+  cartão: 'card',
+  card: 'card',
+  parcelas: 'installments',
+  installments: 'installments',
+  parcelado: 'installments',
+  pago: 'paid',
+  paid: 'paid',
+  observacoes: 'notes',
+  observações: 'notes',
+  notes: 'notes',
+};
+
+function canonicalizeHeaders(headers) {
+  return headers.map((h) => COLUMN_ALIASES[normalize(h)] || normalize(h));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Geração de template
+// ─────────────────────────────────────────────────────────────────────────
+
+export function generateTemplateCSV() {
+  const today = new Date();
+  const todayStr = today.toLocaleDateString('pt-BR'); // DD/MM/YYYY
+
+  const lines = [
+    ['Tipo', 'Descrição', 'Valor', 'Data', 'Categoria', 'Cartão', 'Parcelas', 'Pago', 'Observações'],
+    ['Despesa', 'Aluguel', '1800,00', todayStr, 'Moradia', '', '1', 'Não', 'Pago via PIX'],
+    ['Despesa', 'Tênis novo', '300,00', todayStr, 'Vestuário', 'Nubank', '8', 'Não', 'Black Friday'],
+    ['Receita', 'Salário', '5000,00', todayStr, 'Trabalho', '', '1', 'Sim', ''],
+    [],
+    ['# DICAS DE PREENCHIMENTO:'],
+    ['# Tipo:'],
+    ['#   "Despesa" ou "Receita" (também aceita Saída/Entrada)'],
+    ['# Valor:'],
+    ['#   Use vírgula para decimais. Ex: 1234,56'],
+    ['# Data:'],
+    ['#   Formato BR (DD/MM/AAAA) ou ISO (AAAA-MM-DD). Ex: 04/05/2026'],
+    ['# Categoria:'],
+    ['#   Nome aproximado da categoria já cadastrada. Ex: "Alimentação", "alimentacao"'],
+    ['# Cartão:'],
+    ['#   Nome do cartão já cadastrado, ou deixe vazio para "Conta/dinheiro"'],
+    ['# Parcelas:'],
+    ['#   1 ou vazio = à vista. 8 = parcela em 8x. Apenas com cartão.'],
+    ['# Pago:'],
+    ['#   "Sim" se já paga, "Não" ou vazio se pendente.'],
+    ['# Apague essas linhas com # antes de subir o arquivo.'],
+  ];
+
+  return lines.map((row) => row.map(csvEscape).join(',')).join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Export CSV das transações
+// ─────────────────────────────────────────────────────────────────────────
+
+export async function exportTransactionsCSV({ startDate, endDate } = {}) {
+  let query = supabase
+    .from('transactions')
+    .select(`*, category:categories(name), credit_card:credit_cards(name)`)
+    .order('date', { ascending: false });
+
+  if (startDate) query = query.gte('date', startDate);
+  if (endDate) query = query.lte('date', endDate);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const lines = [
+    ['Tipo', 'Descrição', 'Valor', 'Data', 'Categoria', 'Cartão', 'Parcelas', 'Pago', 'Observações'],
+  ];
+
+  for (const t of data || []) {
+    const tipo = t.type === 'income' ? 'Receita' : 'Despesa';
+    const valor = String(Number(t.amount).toFixed(2)).replace('.', ',');
+    const date = t.date ? t.date.slice(0, 10).split('-').reverse().join('/') : '';
+    const categoria = t.category?.name || '';
+    const cartao = t.credit_card?.name || '';
+    const parcelas = t.installment_total > 1
+      ? `${t.installment_number}/${t.installment_total}`
+      : '1';
+    const pago = t.paid ? 'Sim' : 'Não';
+    const obs = t.notes || '';
+
+    lines.push([tipo, t.description || '', valor, date, categoria, cartao, parcelas, pago, obs]);
+  }
+
+  return {
+    csv: lines.map((row) => row.map(csvEscape).join(',')).join('\n'),
+    count: data?.length || 0,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Parse + validação do CSV de upload
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parseia um CSV de upload e retorna preview com validação.
+ * NÃO importa nada — apenas valida.
+ *
+ * Retorna:
+ *   {
+ *     rows: [{ status: 'ok'|'warn'|'error', original, parsed, messages }],
+ *     summary: { ok, warn, error, total }
+ *   }
+ */
+export async function parseImportCSV(text, { categories, cards, existingTransactions }) {
+  const rawLines = parseCsvText(text);
+  if (rawLines.length === 0) {
+    throw new Error('Arquivo vazio.');
+  }
+
+  // Filtra linhas que começam com # (comentários) e linhas vazias
+  const lines = rawLines.filter((row) => {
+    const first = (row[0] || '').trim();
+    return first !== '' && !first.startsWith('#');
+  });
+
+  if (lines.length < 2) {
+    throw new Error('O arquivo precisa ter pelo menos um cabeçalho e uma linha de dados.');
+  }
+
+  // Primeira linha = cabeçalhos
+  const headers = canonicalizeHeaders(lines[0]);
+
+  // Verifica colunas obrigatórias
+  const required = ['type', 'description', 'amount', 'date'];
+  const missing = required.filter((r) => !headers.includes(r));
+  if (missing.length > 0) {
+    const labels = { type: 'Tipo', description: 'Descrição', amount: 'Valor', date: 'Data' };
+    throw new Error(
+      `Faltam colunas obrigatórias: ${missing.map((m) => labels[m]).join(', ')}.`
+    );
+  }
+
+  // Indexa colunas
+  const colIdx = {};
+  headers.forEach((h, i) => { colIdx[h] = i; });
+
+  // Set de chaves de duplicatas existentes no banco
+  const dupSet = new Set(
+    (existingTransactions || []).map(
+      (t) => `${t.date}::${normalize(t.description)}::${Number(t.amount).toFixed(2)}`
+    )
+  );
+
+  const dataLines = lines.slice(1);
+  const rows = [];
+
+  for (let i = 0; i < dataLines.length; i++) {
+    const line = dataLines[i];
+    const get = (key) => (colIdx[key] != null ? (line[colIdx[key]] || '').trim() : '');
+
+    const messages = [];
+    let status = 'ok';
+
+    // Tipo
+    const type = parseType(get('type'));
+    if (!type) {
+      messages.push({ level: 'error', text: `Tipo inválido: "${get('type')}". Use "Despesa" ou "Receita".` });
+      status = 'error';
+    }
+
+    // Descrição
+    const description = get('description');
+    if (!description) {
+      messages.push({ level: 'error', text: 'Descrição vazia.' });
+      status = 'error';
+    }
+
+    // Valor
+    const amount = parseMoney(get('amount'));
+    if (amount == null || amount <= 0) {
+      messages.push({ level: 'error', text: `Valor inválido: "${get('amount')}".` });
+      status = 'error';
+    }
+
+    // Data
+    const date = parseDate(get('date'));
+    if (!date) {
+      messages.push({ level: 'error', text: `Data inválida: "${get('date')}". Use DD/MM/AAAA.` });
+      status = 'error';
+    }
+
+    // Categoria — busca aproximada
+    const categoryRaw = get('category');
+    let categoryId = null;
+    let categoryName = '';
+    if (!categoryRaw) {
+      messages.push({ level: 'error', text: 'Categoria vazia.' });
+      status = 'error';
+    } else {
+      const expectedType = type;
+      const filteredCats = categories.filter((c) => !expectedType || c.type === expectedType);
+      const match = findClosest(categoryRaw, filteredCats, (c) => c.name);
+      if (!match) {
+        messages.push({
+          level: 'error',
+          text: `Categoria "${categoryRaw}" não encontrada. Cadastre antes ou use uma existente.`,
+        });
+        status = 'error';
+      } else {
+        categoryId = match.item.id;
+        categoryName = match.item.name;
+        if (!match.exact) {
+          messages.push({
+            level: 'warn',
+            text: `Categoria "${categoryRaw}" interpretada como "${match.item.name}".`,
+          });
+          if (status !== 'error') status = 'warn';
+        }
+      }
+    }
+
+    // Cartão (opcional)
+    const cardRaw = get('card');
+    let creditCardId = null;
+    let cardName = '';
+    if (cardRaw) {
+      const match = findClosest(cardRaw, cards, (c) => c.name);
+      if (!match) {
+        messages.push({
+          level: 'warn',
+          text: `Cartão "${cardRaw}" não encontrado. Despesa será como "Conta/dinheiro".`,
+        });
+        if (status !== 'error') status = 'warn';
+      } else {
+        creditCardId = match.item.id;
+        cardName = match.item.name;
+        if (!match.exact) {
+          messages.push({
+            level: 'warn',
+            text: `Cartão "${cardRaw}" interpretado como "${match.item.name}".`,
+          });
+          if (status !== 'error') status = 'warn';
+        }
+      }
+    }
+
+    // Parcelas (opcional)
+    let installments = 1;
+    const instRaw = get('installments');
+    if (instRaw) {
+      // Aceita "8" ou "1/8" (importa como linha individual, não cria 8 parcelas)
+      const parts = instRaw.split('/').map((s) => s.trim());
+      const n = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(n) && n >= 1) installments = n;
+    }
+    if (installments > 1 && !creditCardId) {
+      messages.push({
+        level: 'warn',
+        text: `Parcelamento ignorado (sem cartão). Lançamento como à vista.`,
+      });
+      if (status !== 'error') status = 'warn';
+      installments = 1;
+    }
+
+    // Pago (default: pendente)
+    const paid = parseBool(get('paid'));
+
+    // Detecção de duplicata (baseado no que JÁ existe no banco)
+    if (status !== 'error' && date && description && amount != null) {
+      const key = `${date}::${normalize(description)}::${amount.toFixed(2)}`;
+      if (dupSet.has(key)) {
+        messages.push({
+          level: 'warn',
+          text: 'Já existe uma transação com essa mesma data, descrição e valor. Será ignorada.',
+        });
+        status = 'duplicate';
+      }
+    }
+
+    rows.push({
+      lineNumber: i + 2, // +2 = pula cabeçalho e usa numeração 1-based
+      status, // 'ok' | 'warn' | 'error' | 'duplicate'
+      original: line,
+      parsed: {
+        type, description, amount, date,
+        category_id: categoryId, categoryName,
+        credit_card_id: creditCardId, cardName,
+        installments, paid,
+      },
+      messages,
+    });
+  }
+
+  const summary = {
+    total: rows.length,
+    ok: rows.filter((r) => r.status === 'ok').length,
+    warn: rows.filter((r) => r.status === 'warn').length,
+    error: rows.filter((r) => r.status === 'error').length,
+    duplicate: rows.filter((r) => r.status === 'duplicate').length,
+  };
+
+  return { rows, summary };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Importa as linhas validadas
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Importa as linhas que passaram pela validação (status 'ok' ou 'warn').
+ * Linhas 'error' e 'duplicate' são automaticamente ignoradas.
+ */
+export async function importValidRows(rows) {
+  const validRows = rows.filter((r) => r.status === 'ok' || r.status === 'warn');
+
+  let created = 0;
+  let installmentsCreated = 0;
+
+  for (const row of validRows) {
+    const p = row.parsed;
+    if (p.installments > 1) {
+      // Cria como compra parcelada (gera N parcelas)
+      const result = await transactionService.createInstallments({
+        type: p.type,
+        totalAmount: p.amount,
+        installmentCount: p.installments,
+        startDate: p.date,
+        description: p.description,
+        category_id: p.category_id,
+        credit_card_id: p.credit_card_id,
+      });
+      installmentsCreated += result.transactions?.length || p.installments;
+    } else {
+      // Cria como despesa simples — usa create + atualiza paid se necessário
+      const tx = await transactionService.create({
+        type: p.type,
+        amount: p.amount,
+        description: p.description,
+        date: p.date,
+        category_id: p.category_id,
+        credit_card_id: p.credit_card_id,
+      });
+      // Se foi marcada como paga na planilha, atualiza
+      if (p.paid && tx?.id) {
+        try {
+          await transactionService.togglePaid(tx.id, true);
+        } catch {
+          /* não crítico */
+        }
+      }
+      created += 1;
+    }
+  }
+
+  return {
+    simpleCreated: created,
+    installmentTransactionsCreated: installmentsCreated,
+    total: created + installmentsCreated,
+    skipped: rows.length - validRows.length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Helpers expostos pra UI
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Carrega tudo que o parser precisa. */
+export async function loadImportContext() {
+  const [catsRes, cardsRes, txsRes] = await Promise.all([
+    supabase.from('categories').select('id, name, type, color'),
+    supabase.from('credit_cards').select('id, name, color').eq('active', true),
+    // Pega todas pra detectar duplicatas (limit alto pra cobrir histórico)
+    supabase.from('transactions').select('date, description, amount').limit(5000),
+  ]);
+
+  return {
+    categories: catsRes.data || [],
+    cards: cardsRes.data || [],
+    existingTransactions: txsRes.data || [],
+  };
+}
+
+/** Helper pra disparar download de string como arquivo. */
+export function downloadCSV(content, filename) {
+  // BOM UTF-8 pra Excel abrir com acentos certos
+  const BOM = '\uFEFF';
+  const blob = new Blob([BOM + content], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}

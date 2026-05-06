@@ -10,6 +10,7 @@ import Cards from './pages/Cards';
 import Categories from './pages/Categories';
 import Recurring from './pages/Recurring';
 import Settings from './pages/Settings';
+import ImportExport from './pages/ImportExport';
 
 export default function App() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
               <Route path="cards" element={<Cards />} />
               <Route path="categories" element={<Categories />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="import-export" element={<ImportExport />} />
             </Route>
           </Routes>
         </BrowserRouter>

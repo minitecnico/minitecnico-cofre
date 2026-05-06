@@ -1,4 +1,5 @@
-import { Settings as SettingsIcon, LogOut, Mail, User as UserIcon } from 'lucide-react';
+import { Settings as SettingsIcon, LogOut, Mail, User as UserIcon, FileSpreadsheet } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 /**
@@ -52,6 +53,29 @@ export default function Settings() {
           </div>
         </div>
       </div>
+
+      {/* Importar / Exportar */}
+      <Link
+        to="/import-export"
+        className="block w-full card-flat p-5 md:p-6 transition-all duration-200 hover:border-ink-900/40 group"
+      >
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-xl bg-accent/30 group-hover:bg-gradient-accent group-hover:shadow-soft-md flex items-center justify-center text-ink-900 transition-all duration-200 flex-shrink-0">
+              <FileSpreadsheet className="w-5 h-5" strokeWidth={2.25} />
+            </div>
+            <div className="min-w-0">
+              <p className="font-display font-bold text-base md:text-lg text-ink-900">
+                Importar e exportar
+              </p>
+              <p className="text-xs md:text-sm text-ink-500 truncate">
+                Baixe seus dados em CSV ou suba uma planilha preenchida
+              </p>
+            </div>
+          </div>
+          <span className="text-ink-400 text-xl flex-shrink-0">→</span>
+        </div>
+      </Link>
 
       {/* Sair */}
       <button
