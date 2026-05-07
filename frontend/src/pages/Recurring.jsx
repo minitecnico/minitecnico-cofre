@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
-import { Repeat, Plus, Pause, Play, Trash2, Pencil, ArrowUpCircle, ArrowDownCircle, CreditCard as CardIcon, Tv, Landmark } from 'lucide-react';
+import { Repeat, Plus, Pause, Play, Trash2, Pencil, ArrowUpCircle, ArrowDownCircle, CreditCard as CardIcon, Tv, Landmark, CheckSquare, X, Check } from 'lucide-react';
 import { recurringService, categoryService, cardService } from '../services';
 import { formatCurrency, parseAmount } from '../utils/format';
 import Modal from '../components/Modal';
@@ -240,6 +240,15 @@ export default function RecurringPage() {
   // Modal específico de empréstimo (atalho para criar despesa parcelada longa)
   const [loanModalOpen, setLoanModalOpen] = useState(false);
 
+  // ─────────────────────────────────────────────────────────────────────
+  // SELEÇÃO MÚLTIPLA — para agir em lote (excluir/pausar/retomar várias)
+  // ─────────────────────────────────────────────────────────────────────
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState(null);
+
   async function load() {
     setLoading(true);
     try {
@@ -266,6 +275,94 @@ export default function RecurringPage() {
       `Mas nenhuma nova será gerada nos próximos meses.`
     )) return;
     await recurringService.remove(item.id);
+    load();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Handlers de seleção múltipla
+  // ─────────────────────────────────────────────────────────────────────
+
+  function toggleSelection(itemId) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
+
+  function selectAll(itemList) {
+    setSelectedIds(new Set(itemList.map((it) => it.id)));
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+
+  // Auto-clear feedback após 4s
+  useEffect(() => {
+    if (!bulkFeedback) return;
+    const t = setTimeout(() => setBulkFeedback(null), 4500);
+    return () => clearTimeout(t);
+  }, [bulkFeedback]);
+
+  // Sai do modo seleção ao trocar de aba (UX consistente)
+  useEffect(() => {
+    if (selectionMode) exitSelectionMode();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  async function handleBulkDelete() {
+    setConfirmingBulkDelete(false);
+    setBulkProcessing(true);
+    const ids = [...selectedIds];
+    let success = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await recurringService.remove(id);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    setBulkProcessing(false);
+    exitSelectionMode();
+    setBulkFeedback({
+      type: failed > 0 ? 'partial' : 'success',
+      text: failed > 0
+        ? `${success} excluída${success !== 1 ? 's' : ''}, ${failed} falhou.`
+        : `✓ ${success} ${success === 1 ? 'excluída' : 'excluídas'} com sucesso.`,
+    });
+    load();
+  }
+
+  async function handleBulkToggleActive(active) {
+    setBulkProcessing(true);
+    const ids = [...selectedIds];
+    let success = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await recurringService.toggleActive(id, active);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    setBulkProcessing(false);
+    exitSelectionMode();
+    setBulkFeedback({
+      type: failed > 0 ? 'partial' : 'success',
+      text: failed > 0
+        ? `${success} ${active ? 'retomadas' : 'pausadas'}, ${failed} falhou.`
+        : `✓ ${success} ${success === 1 ? (active ? 'retomada' : 'pausada') : (active ? 'retomadas' : 'pausadas')} com sucesso.`,
+    });
     load();
   }
 
@@ -408,6 +505,49 @@ export default function RecurringPage() {
         </div>
       ) : (
         <>
+          {/* Toolbar de seleção múltipla */}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            {!selectionMode ? (
+              <button
+                onClick={() => setSelectionMode(true)}
+                className="inline-flex items-center gap-2 px-3 py-2 min-h-[36px] rounded-xl text-xs font-bold uppercase tracking-widest text-ink-600 hover:text-ink-900 hover:bg-ink-100 transition-all duration-200"
+              >
+                <CheckSquare className="w-4 h-4" />
+                Selecionar
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={exitSelectionMode}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-xl text-xs font-bold text-ink-700 hover:bg-ink-100 transition-all duration-200"
+                >
+                  <X className="w-4 h-4" />
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => selectAll(itemsForTab)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-xl text-xs font-bold text-ink-900 bg-ink-100 hover:bg-ink-200 transition-all duration-200"
+                >
+                  Selecionar todas ({itemsForTab.length})
+                </button>
+                {selectedIds.size > 0 && (
+                  <button
+                    onClick={clearSelection}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-xl text-xs font-semibold text-ink-500 hover:text-ink-900 transition-all duration-200"
+                  >
+                    Desmarcar ({selectedIds.size})
+                  </button>
+                )}
+              </div>
+            )}
+
+            {selectionMode && selectedIds.size > 0 && (
+              <span className="text-xs font-bold text-ink-900 bg-accent/30 px-3 py-1.5 rounded-full">
+                {selectedIds.size} {selectedIds.size === 1 ? 'selecionada' : 'selecionadas'}
+              </span>
+            )}
+          </div>
+
           {activeItems.length > 0 && (
             <div>
               <h3 className="font-display text-lg md:text-xl font-bold mb-3 md:mb-4 tracking-tight">
@@ -421,6 +561,9 @@ export default function RecurringPage() {
                     onEdit={(it) => { setEditing(it); open(); }}
                     onToggleActive={handleToggleActive}
                     onDelete={handleDelete}
+                    selectionMode={selectionMode}
+                    selected={selectedIds.has(item.id)}
+                    onToggleSelection={() => toggleSelection(item.id)}
                   />
                 ))}
               </div>
@@ -432,7 +575,7 @@ export default function RecurringPage() {
               <h3 className="font-display text-lg md:text-xl font-bold mb-3 md:mb-4 text-ink-500 tracking-tight">
                 Pausadas <span className="text-sm font-mono">({pausedItems.length})</span>
               </h3>
-              <div className="bg-white rounded-2xl shadow-soft border border-ink-200 divide-y divide-ink-100 opacity-60 overflow-hidden">
+              <div className={`bg-white rounded-2xl shadow-soft border border-ink-200 divide-y divide-ink-100 overflow-hidden ${selectionMode ? '' : 'opacity-60'}`}>
                 {pausedItems.map((item) => (
                   <RecurringRow
                     key={item.id}
@@ -440,12 +583,47 @@ export default function RecurringPage() {
                     onEdit={(it) => { setEditing(it); open(); }}
                     onToggleActive={handleToggleActive}
                     onDelete={handleDelete}
+                    selectionMode={selectionMode}
+                    selected={selectedIds.has(item.id)}
+                    onToggleSelection={() => toggleSelection(item.id)}
                   />
                 ))}
               </div>
             </div>
           )}
+
+          {/* Espaço extra no final pra não esconder atrás da barra flutuante mobile */}
+          {selectionMode && selectedIds.size > 0 && (
+            <div className="h-24 md:h-0" aria-hidden="true" />
+          )}
         </>
+      )}
+
+      {/* Feedback flutuante (após ações em lote) */}
+      {bulkFeedback && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-3 rounded-xl shadow-soft-lg animate-fade-in bg-ink-900 text-ink-50 max-w-md mx-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <span>{bulkFeedback.text}</span>
+            <button
+              onClick={() => setBulkFeedback(null)}
+              className="ml-2 text-ink-400 hover:text-white"
+              aria-label="Fechar"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Barra de ações flutuante quando há itens selecionados */}
+      {selectionMode && selectedIds.size > 0 && (
+        <BulkActionBar
+          count={selectedIds.size}
+          processing={bulkProcessing}
+          onPause={() => handleBulkToggleActive(false)}
+          onResume={() => handleBulkToggleActive(true)}
+          onDelete={() => setConfirmingBulkDelete(true)}
+        />
       )}
 
       {/* Modal: criar/editar recorrência ou assinatura */}
@@ -480,6 +658,97 @@ export default function RecurringPage() {
           onCancel={() => setLoanModalOpen(false)}
         />
       </Modal>
+
+      {/* Modal: confirmar exclusão em lote */}
+      <Modal
+        isOpen={confirmingBulkDelete}
+        onClose={() => setConfirmingBulkDelete(false)}
+        title={`Excluir ${selectedIds.size} ${selectedIds.size === 1 ? 'item' : 'itens'}`}
+      >
+        <div className="space-y-4">
+          <div className="px-4 py-3 bg-red-50 border border-negative rounded-xl">
+            <p className="text-sm">
+              Tem certeza que deseja excluir <strong>{selectedIds.size}</strong>
+              {' '}{selectedIds.size === 1 ? 'recorrência' : 'recorrências'}?
+            </p>
+            <p className="text-xs text-ink-700 mt-2">
+              ✓ <strong>Histórico preservado:</strong> as transações já criadas em meses anteriores continuam existindo (só perdem o vínculo com o modelo).
+            </p>
+            <p className="text-xs text-ink-700 mt-1">
+              ⚠ <strong>Não há como desfazer.</strong> Nenhuma transação nova será gerada nos próximos meses para esses itens.
+            </p>
+          </div>
+
+          <div className="flex flex-col-reverse sm:flex-row gap-3">
+            <button
+              onClick={() => setConfirmingBulkDelete(false)}
+              className="btn-ghost"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              className="flex-1 px-5 py-3 min-h-[44px] bg-negative text-white font-bold rounded-xl shadow-soft-md hover:shadow-soft-lg active:scale-[0.98] transition-all duration-200"
+            >
+              Sim, excluir {selectedIds.size} {selectedIds.size === 1 ? 'item' : 'itens'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Barra de ações flutuante (modo seleção)
+// ─────────────────────────────────────────────────────────────────────────
+
+function BulkActionBar({ count, processing, onPause, onResume, onDelete }) {
+  return (
+    <div className="fixed left-2 right-2 md:left-auto md:right-4 md:max-w-md bottom-20 md:bottom-4 z-40 animate-fade-in">
+      <div className="rounded-2xl shadow-soft-lg bg-gradient-dark text-ink-50 p-3 md:p-4">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-accent text-ink-900 flex items-center justify-center font-display font-bold text-sm flex-shrink-0">
+              {count}
+            </div>
+            <p className="font-bold text-sm truncate">
+              {count === 1 ? 'item selecionado' : 'itens selecionados'}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            onClick={onResume}
+            disabled={processing}
+            className="px-2 py-2.5 min-h-[44px] bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+          >
+            <Play className="w-4 h-4" />
+            <span>Retomar</span>
+          </button>
+          <button
+            onClick={onPause}
+            disabled={processing}
+            className="px-2 py-2.5 min-h-[44px] bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+          >
+            <Pause className="w-4 h-4" />
+            <span>Pausar</span>
+          </button>
+          <button
+            onClick={onDelete}
+            disabled={processing}
+            className="px-2 py-2.5 min-h-[44px] bg-negative hover:bg-red-600 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>Excluir</span>
+          </button>
+        </div>
+
+        {processing && (
+          <p className="text-[10px] text-center text-ink-400 mt-2">Processando…</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -809,7 +1078,10 @@ function LoanForm({ onSaved, onCancel }) {
   );
 }
 
-function RecurringRow({ item, onEdit, onToggleActive, onDelete }) {
+function RecurringRow({
+  item, onEdit, onToggleActive, onDelete,
+  selectionMode, selected, onToggleSelection,
+}) {
   const isIncome = item.type === 'income';
   const isSubscription = item.kind === 'subscription';
   const Icon = isSubscription ? Tv : (isIncome ? ArrowUpCircle : ArrowDownCircle);
@@ -817,9 +1089,35 @@ function RecurringRow({ item, onEdit, onToggleActive, onDelete }) {
   const cat = item.category || {};
   const card = item.credit_card;
 
+  // Em modo seleção, click em qualquer parte da linha alterna a seleção
+  function handleRowClick() {
+    if (selectionMode) onToggleSelection();
+  }
+
   return (
-    <div className="flex items-stretch hover:bg-ink-50 transition-colors">
+    <div
+      className={`flex items-stretch transition-colors ${
+        selected ? 'bg-accent/15' : 'hover:bg-ink-50'
+      } ${selectionMode ? 'cursor-pointer' : ''}`}
+      onClick={handleRowClick}
+    >
       <div className="w-1 flex-shrink-0" style={{ backgroundColor: cat.color || '#64748b' }} />
+
+      {/* Checkbox no modo seleção */}
+      {selectionMode && (
+        <div className="flex items-center justify-center pl-3 flex-shrink-0">
+          <div
+            className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all duration-200 ${
+              selected
+                ? 'bg-ink-900 border-ink-900'
+                : 'bg-white border-ink-300'
+            }`}
+            aria-hidden="true"
+          >
+            {selected && <Check className="w-3 h-3 text-accent" strokeWidth={4} />}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 min-w-0 p-3 md:p-4 flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
         <div className="flex-1 min-w-0">
@@ -841,6 +1139,11 @@ function RecurringRow({ item, onEdit, onToggleActive, onDelete }) {
                 <CardIcon className="w-3 h-3" /> {card.name}
               </span>
             )}
+            {!item.active && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-ink-200 text-ink-700">
+                Pausada
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2 text-xs text-ink-500 flex-wrap">
             <span className="font-medium" style={{ color: cat.color }}>{cat.name}</span>
@@ -854,30 +1157,33 @@ function RecurringRow({ item, onEdit, onToggleActive, onDelete }) {
             {isIncome ? '+' : '−'} {formatCurrency(item.amount)}
           </div>
 
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => onToggleActive(item)}
-              className="w-9 h-9 flex items-center justify-center hover:bg-ink-200 transition-colors"
-              aria-label={item.active ? 'Pausar' : 'Retomar'}
-              title={item.active ? 'Pausar (não gera mais)' : 'Retomar'}
-            >
-              {item.active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-            </button>
-            <button
-              onClick={() => onEdit(item)}
-              className="w-9 h-9 flex items-center justify-center hover:bg-ink-200 transition-colors"
-              aria-label="Editar"
-            >
-              <Pencil className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => onDelete(item)}
-              className="w-9 h-9 flex items-center justify-center text-negative hover:bg-red-50 transition-colors"
-              aria-label="Excluir"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
+          {/* Ações individuais (escondidas no modo seleção) */}
+          {!selectionMode && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={(e) => { e.stopPropagation(); onToggleActive(item); }}
+                className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-ink-200 transition-colors"
+                aria-label={item.active ? 'Pausar' : 'Retomar'}
+                title={item.active ? 'Pausar (não gera mais)' : 'Retomar'}
+              >
+                {item.active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onEdit(item); }}
+                className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-ink-200 transition-colors"
+                aria-label="Editar"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(item); }}
+                className="w-9 h-9 flex items-center justify-center rounded-lg text-negative hover:bg-red-50 transition-colors"
+                aria-label="Excluir"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
