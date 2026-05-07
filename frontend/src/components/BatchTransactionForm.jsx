@@ -89,21 +89,33 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
     setItems((prev) => prev.filter((it) => it.id !== id));
   }
 
-  // Calcula resumo: total e quantidade de transações que serão criadas
-  // (uma linha parcelada em 8x conta como 8 transações)
+  // Calcula resumo: total, linhas válidas e transações criadas.
+  // Também detecta linhas "parcialmente preenchidas" (algo digitado mas faltando algo)
+  // pra dar feedback útil ao usuário no botão.
   const summary = useMemo(() => {
     let total = 0;
     let validLines = 0;
     let totalTransactions = 0;
+    let missingDescription = 0; // linhas com valor mas sem descrição
+    let missingAmount = 0;      // linhas com descrição mas sem valor
+
     for (const it of items) {
       const amt = parseAmount(it.amount);
-      if (amt > 0 && it.description.trim()) {
+      const desc = it.description.trim();
+      const hasAmount = amt > 0;
+      const hasDesc = !!desc;
+
+      if (hasAmount && hasDesc) {
         total += amt;
         validLines++;
         totalTransactions += it.installmentCount || 1;
+      } else if (hasAmount && !hasDesc) {
+        missingDescription++;
+      } else if (!hasAmount && hasDesc) {
+        missingAmount++;
       }
     }
-    return { total, validLines, totalTransactions };
+    return { total, validLines, totalTransactions, missingDescription, missingAmount };
   }, [items]);
 
   async function handleSubmit(e) {
@@ -328,7 +340,19 @@ export default function BatchTransactionForm({ type = 'expense', onSaved, onCanc
           {submitting
             ? 'Salvando…'
             : summary.validLines === 0
-              ? 'Preencha pelo menos uma'
+              ? (() => {
+                  // Mensagem útil: diz o que falta especificamente
+                  if (summary.missingDescription > 0 && summary.missingAmount === 0) {
+                    return `⚠ Falta descrição em ${summary.missingDescription} ${summary.missingDescription === 1 ? 'linha' : 'linhas'}`;
+                  }
+                  if (summary.missingAmount > 0 && summary.missingDescription === 0) {
+                    return `⚠ Falta valor em ${summary.missingAmount} ${summary.missingAmount === 1 ? 'linha' : 'linhas'}`;
+                  }
+                  if (summary.missingDescription > 0 && summary.missingAmount > 0) {
+                    return '⚠ Complete descrição e valor';
+                  }
+                  return 'Preencha descrição e valor';
+                })()
               : `Salvar ${summary.validLines} ${summary.validLines === 1 ? (isIncome ? 'receita' : 'despesa') : (isIncome ? 'receitas' : 'despesas')}`}
         </button>
       </div>
@@ -372,6 +396,15 @@ function BatchItemRow({
     isInstallment
   );
 
+  // Detecta linhas "parcialmente preenchidas" — algo digitado mas falta complementar.
+  // Ajuda o usuário a saber EXATAMENTE qual linha precisa atenção.
+  const desc = item.description.trim();
+  const amountValue = parseAmount(item.amount);
+  const hasDescription = !!desc;
+  const hasAmount = amountValue > 0;
+  const isPartiallyFilled = (hasDescription && !hasAmount) || (!hasDescription && hasAmount);
+  const isComplete = hasDescription && hasAmount;
+
   // Preview de parcelas
   const installmentPreview = useMemo(() => {
     const total = parseAmount(item.amount);
@@ -396,6 +429,9 @@ function BatchItemRow({
 
   return (
     <div className={`rounded-xl bg-white transition-all duration-200 ${
+      isPartiallyFilled ? 'border-2 border-warn shadow-soft bg-yellow-50/30' :
+      isComplete && hasOverride ? 'border-2 border-ink-900 shadow-soft' :
+      isComplete ? 'border-2 border-positive/40 shadow-soft' :
       hasOverride ? 'border-2 border-ink-900 shadow-soft' : 'border border-ink-200'
     }`}>
       {/* Linha principal */}
@@ -459,6 +495,15 @@ function BatchItemRow({
           </button>
         )}
       </div>
+
+      {/* Aviso visual quando linha está parcialmente preenchida */}
+      {isPartiallyFilled && (
+        <div className="px-3 pb-2 text-[10px] text-yellow-800 font-bold flex items-center gap-1">
+          <span>⚠</span>
+          {hasDescription && !hasAmount && <span>Falta digitar o valor.</span>}
+          {!hasDescription && hasAmount && <span>Falta digitar a descrição.</span>}
+        </div>
+      )}
 
       {/* Resumo compacto quando há override mas não está expandido */}
       {!item.expanded && hasOverride && (
