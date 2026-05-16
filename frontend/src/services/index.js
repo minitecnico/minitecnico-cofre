@@ -241,7 +241,7 @@ export const cardService = {
           card,
           // Limite total
           cardLimit: Number(s.card_limit || card.card_limit || 0),
-          // Compras não pagas (ocupam limite)
+          // Compras não pagas (ocupam limite) — agora considera TODAS as faturas não pagas
           openBill: Number(s.open_bill || 0),
           // Compras já pagas no ciclo (referência)
           paidInCycle: Number(s.paid_in_cycle || 0),
@@ -254,6 +254,9 @@ export const cardService = {
           cycleStart: s.cycle_start,
           cycleEnd: s.cycle_end,
           utilizationPercent: Number(s.utilization_percent || 0),
+          // Fatura "atual" (mais antiga não paga) — usado pelo botão "Pagar fatura"
+          currentBillMonth: s.current_bill_month || null,
+          currentBillAmount: Number(s.current_bill_amount || 0),
         };
       })
     );
@@ -321,14 +324,50 @@ export const cardService = {
   },
 
   /**
-   * Paga a fatura inteira do ciclo atual: marca todas as compras não pagas
-   * do ciclo como pagas. O limite "volta" ao cartão.
-   * Retorna a quantidade de compras marcadas.
+   * Paga uma fatura específica do cartão (todas as compras não pagas daquela fatura).
+   * @param {string} cardId - UUID do cartão
+   * @param {string|null} billMonth - 'YYYY-MM-DD' (dia 1 do mês da fatura). Se null, paga a fatura mais antiga não paga.
+   * @returns {Promise<number>} quantidade de compras marcadas como pagas.
    */
-  async payBill(cardId) {
-    const { data, error } = await supabase.rpc('pay_card_bill', { p_card_id: cardId });
+  async payBill(cardId, billMonth = null) {
+    const { data, error } = await supabase.rpc('pay_card_bill', {
+      p_card_id: cardId,
+      p_bill_month: billMonth,
+    });
     if (error) throw error;
     return data || 0;
+  },
+
+  /**
+   * Lista todas as faturas do cartão (apenas meses que têm transações).
+   * Retorna ordenado da mais antiga pra mais recente.
+   */
+  async bills(cardId) {
+    const { data, error } = await supabase.rpc('get_card_bills', { p_card_id: cardId });
+    if (error) throw error;
+    return (data || []).map((b) => ({
+      billMonth: b.bill_month,
+      closesOn: b.closes_on,
+      dueOn: b.due_on,
+      totalAmount: Number(b.total_amount || 0),
+      paidAmount: Number(b.paid_amount || 0),
+      unpaidAmount: Number(b.unpaid_amount || 0),
+      purchaseCount: Number(b.purchase_count || 0),
+      isFullyPaid: !!b.is_fully_paid,
+      isClosed: !!b.is_closed,
+    }));
+  },
+
+  /**
+   * Lista transações de UMA fatura específica.
+   */
+  async billTransactions(cardId, billMonth) {
+    const { data, error } = await supabase.rpc('get_card_bill_transactions', {
+      p_card_id: cardId,
+      p_bill_month: billMonth,
+    });
+    if (error) throw error;
+    return data || [];
   },
 };
 
