@@ -1,0 +1,118 @@
+# ═══════════════════════════════════════════════════════════
+#  .claudeignore — Cofre (finance-dashboard)
+#  Arquivos que o Claude Code deve IGNORAR ao ler o projeto.
+#  Sintaxe igual ao .gitignore.
+# ═══════════════════════════════════════════════════════════
+
+
+# ─── SEGREDOS — NUNCA permitir que o Claude leia ────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+.supabase/
+
+
+# ─── DEPENDÊNCIAS ───────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+.pnpm-store/
+.yarn/
+
+
+# ─── LOCK FILES (gigantes, sem valor para análise) ──────────
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+frontend/package-lock.json
+
+
+# ─── BUILDS E ARTEFATOS DE DEPLOY ───────────────────────────
+dist/
+build/
+out/
+frontend/dist/
+frontend/build/
+.vercel/
+.next/
+.vite/
+
+
+# ─── CACHES ─────────────────────────────────────────────────
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+.tailwind-cache/
+
+
+# ─── LOGS ───────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+# ─── SISTEMA OPERACIONAL / EDITOR ───────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+
+# ─── GIT ────────────────────────────────────────────────────
+.git/
+
+
+# ─── COBERTURA DE TESTES (não há testes hoje, mas previne) ──
+coverage/
+.nyc_output/
+
+
+# ─── PWA / ASSETS BINÁRIOS ──────────────────────────────────
+# Ícones PWA: Claude não precisa ler PNGs binários
+frontend/public/icons/*.png
+frontend/public/favicon.ico
+# Mas DEIXA o SVG visível — é texto, útil pra entender o logo
+!frontend/public/icons/icon.svg
+
+
+# ─── MÍDIA PESADA ───────────────────────────────────────────
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.mp4
+*.mov
+*.avi
+*.psd
+*.ai
+*.sketch
+*.fig
+
+
+# ─── DUMPS / BACKUPS LOCAIS DO SUPABASE ─────────────────────
+supabase/.branches/
+supabase/.temp/
+supabase/dumps/
+*.sqlite
+*.db
+*.dump
+*.bak
+
+
+# ─── BACKUPS DO PRÓPRIO APP (export JSON do backupService) ──
+# Se você baixar um backup do app pra raiz, evita o Claude ler dados pessoais
+cofre-backup-*.json
+backup-*.json
+
+
+# ─── ARQUIVOS DE DEPLOY EFÊMEROS ────────────────────────────
+.vercel/
+.netlify/
