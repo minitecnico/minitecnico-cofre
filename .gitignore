@@ -1,0 +1,109 @@
+# ═══════════════════════════════════════════════════════════
+#  .gitignore — Cofre (finance-dashboard)
+#  Arquivos que o Git deve IGNORAR (não enviar pro GitHub).
+# ═══════════════════════════════════════════════════════════
+
+
+# ─── 🔴 SEGREDOS — NUNCA, JAMAIS commitar ───────────────────
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+# Mas o .env.example PODE (e deve) ser commitado:
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+
+
+# ─── DEPENDÊNCIAS ───────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.yarn/
+jspm_packages/
+
+
+# ─── BUILDS E ARTEFATOS ─────────────────────────────────────
+dist/
+build/
+out/
+.vite/
+.next/
+
+
+# ─── DEPLOY ─────────────────────────────────────────────────
+.vercel/
+.netlify/
+
+
+# ─── CACHES ─────────────────────────────────────────────────
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+.tailwind-cache/
+*.tsbuildinfo
+
+
+# ─── LOGS ───────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# ─── SISTEMA OPERACIONAL ────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+
+# ─── EDITORES / IDEs ────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.classpath
+
+
+# ─── COBERTURA DE TESTES ────────────────────────────────────
+coverage/
+.nyc_output/
+
+
+# ─── SUPABASE (CLI local, dumps) ────────────────────────────
+.supabase/
+supabase/.branches/
+supabase/.temp/
+supabase/dumps/
+*.sqlite
+*.db
+*.dump
+
+
+# ─── BACKUPS PESSOAIS DO APP ────────────────────────────────
+# Se você exportar um backup via backupService, ele cai com esse nome.
+# NÃO COMMITAR — tem dados financeiros pessoais.
+cofre-backup-*.json
+backup-*.json
+
+
+# ─── ARQUIVOS TEMPORÁRIOS / RASCUNHOS ───────────────────────
+*.tmp
+*.temp
+*.bak
+*.orig
+.scratch/
+scratch/
