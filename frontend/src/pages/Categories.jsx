@@ -113,6 +113,9 @@ export default function CategoriesPage() {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
+  const [deleting, setDeleting] = useState(null); // categoria pendente de confirmação
+  const [deletingError, setDeletingError] = useState(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
   const { isOpen, open, close } = useDisclosure();
 
   async function load() {
@@ -129,13 +132,23 @@ export default function CategoriesPage() {
     load();
   }, []);
 
-  async function handleDelete(c) {
-    if (!confirm(`Excluir categoria "${c.name}"?`)) return;
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeletingBusy(true);
+    setDeletingError(null);
     try {
-      await categoryService.remove(c.id);
+      await categoryService.remove(deleting.id);
+      setDeleting(null);
       load();
     } catch (err) {
-      alert(err.message || 'Erro ao excluir');
+      // Se o backend ainda barrar (migration não rodada), avisa de forma clara
+      setDeletingError(
+        err.message?.includes('foreign key') || err.code === '23503'
+          ? 'Esta categoria tem transações vinculadas. Rode a migration migration_category_set_null.sql no Supabase para permitir a exclusão.'
+          : (err.message || 'Erro ao excluir.')
+      );
+    } finally {
+      setDeletingBusy(false);
     }
   }
 
@@ -197,7 +210,7 @@ export default function CategoriesPage() {
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleDelete(c)}
+                          onClick={() => { setDeleting(c); setDeletingError(null); }}
                           className="w-9 h-9 flex items-center justify-center text-negative hover:bg-red-50"
                           aria-label="Excluir"
                         >
@@ -219,6 +232,59 @@ export default function CategoriesPage() {
           onSaved={() => { close(); load(); }}
           onCancel={close}
         />
+      </Modal>
+
+      {/* Modal de confirmação de exclusão */}
+      <Modal
+        isOpen={!!deleting}
+        onClose={() => { if (!deletingBusy) { setDeleting(null); setDeletingError(null); } }}
+        title="Excluir categoria"
+      >
+        {deleting && (
+          <div className="space-y-5">
+            <div className="px-4 py-4 bg-red-50 border border-negative/20 rounded-2xl space-y-2">
+              <p className="text-sm text-ink-900">
+                Excluir a categoria{' '}
+                <span
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-white text-xs font-bold"
+                  style={{ backgroundColor: deleting.color }}
+                >
+                  {deleting.name}
+                </span>
+                ?
+              </p>
+              <p className="text-xs text-ink-700">
+                ✓ <strong>Histórico preservado:</strong> as transações que usavam essa categoria continuam existindo — vão aparecer como <em>"Sem categoria"</em>.
+              </p>
+              <p className="text-xs text-ink-700">
+                ⚠ Não há como desfazer.
+              </p>
+            </div>
+
+            {deletingError && (
+              <div className="px-4 py-3 bg-red-50 border border-negative/30 text-negative text-xs rounded-xl">
+                {deletingError}
+              </div>
+            )}
+
+            <div className="flex flex-col-reverse sm:flex-row gap-3">
+              <button
+                onClick={() => { setDeleting(null); setDeletingError(null); }}
+                disabled={deletingBusy}
+                className="btn-ghost disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deletingBusy}
+                className="btn-danger-solid flex-1 disabled:opacity-60"
+              >
+                {deletingBusy ? 'Excluindo…' : 'Sim, excluir'}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

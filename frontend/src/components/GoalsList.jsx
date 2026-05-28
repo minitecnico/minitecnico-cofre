@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import {
-  Target, Plus, TrendingUp, Calendar, Check, Trash2, Edit2,
+  Target, Plus, TrendingUp, Calendar, Check, Trash2, Edit2, Calculator,
   Plane, Home, GraduationCap, Car, Heart, Smartphone, Coffee, Gift,
 } from 'lucide-react';
 import { goalService } from '../services/goals';
 import { formatCurrency, parseAmount, formatDate } from '../utils/format';
 import Modal from './Modal';
+import GoalSimulator from './GoalSimulator';
 
 const PRESET_COLORS = [
   '#b8e94e', // accent
@@ -53,6 +54,7 @@ export default function GoalsList() {
   const [creating, setCreating] = useState(false);
   const [depositingGoal, setDepositingGoal] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [simulatingGoal, setSimulatingGoal] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -128,6 +130,7 @@ export default function GoalsList() {
                 onDeposit={() => setDepositingGoal(goal)}
                 onEdit={() => { setEditing(goal); setCreating(true); }}
                 onDelete={() => setConfirmDelete(goal)}
+                onSimulate={() => setSimulatingGoal(goal)}
               />
             ))}
           </div>
@@ -180,6 +183,14 @@ export default function GoalsList() {
       </Modal>
 
       <Modal
+        isOpen={!!simulatingGoal}
+        onClose={() => setSimulatingGoal(null)}
+        title="Simular meta"
+      >
+        {simulatingGoal && <GoalSimulator goal={simulatingGoal} />}
+      </Modal>
+
+      <Modal
         isOpen={!!confirmDelete}
         onClose={() => setConfirmDelete(null)}
         title="Excluir meta"
@@ -214,7 +225,7 @@ export default function GoalsList() {
 // Card de meta individual
 // ─────────────────────────────────────────────────────────────────────────
 
-function GoalCard({ goal, onDeposit, onEdit, onDelete }) {
+function GoalCard({ goal, onDeposit, onEdit, onDelete, onSimulate }) {
   const Icon = ICON_MAP[goal.icon] || Target;
   const target = Number(goal.target_amount);
   const current = Number(goal.current_amount);
@@ -265,6 +276,14 @@ function GoalCard({ goal, onDeposit, onEdit, onDelete }) {
         </div>
 
         <div className="flex gap-1 flex-shrink-0">
+          <button
+            onClick={onSimulate}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-ink-400 hover:text-ink-900 hover:bg-ink-100 transition-colors"
+            title="Simular"
+            aria-label="Simular meta"
+          >
+            <Calculator className="w-4 h-4" />
+          </button>
           <button
             onClick={onEdit}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-ink-400 hover:text-ink-900 hover:bg-ink-100 transition-colors"

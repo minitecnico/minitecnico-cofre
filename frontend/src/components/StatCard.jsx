@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { motion, useMotionValue, useTransform, animate } from 'motion/react';
 import { formatCurrency } from '../utils/format';
 import { ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
@@ -35,6 +37,17 @@ export default function StatCard({ label, value, variant = 'balance', icon: Icon
       ? value < 0 ? 'text-negative' : 'text-ink-900'
       : value < 0 ? 'text-negative' : '';
 
+  // Anima o número do valor anterior (ou 0 no primeiro mount) até o atual.
+  // useMotionValue preserva o último valor entre renders, então mudar `value`
+  // (ex: ao trocar de mês) faz tween do valor anterior pro novo — não do zero.
+  const motionValue = useMotionValue(0);
+  const displayValue = useTransform(motionValue, (latest) => formatCurrency(latest));
+
+  useEffect(() => {
+    const controls = animate(motionValue, value, { duration: 0.8, ease: 'easeOut' });
+    return () => controls.stop();
+  }, [value, motionValue]);
+
   return (
     <div className={`relative overflow-hidden rounded-2xl shadow-soft p-5 md:p-6 transition-all duration-300 hover:shadow-soft-md hover:-translate-y-0.5 ${variantClasses[variant]}`}>
       {/* Decorativo: círculo gradiente sutil no canto */}
@@ -60,9 +73,9 @@ export default function StatCard({ label, value, variant = 'balance', icon: Icon
         )}
       </div>
 
-      <div className={`relative stat-number text-3xl sm:text-4xl md:text-[2.5rem] break-all leading-tight ${numColor}`}>
-        {formatCurrency(value)}
-      </div>
+      <motion.div className={`relative stat-number text-3xl sm:text-4xl md:text-[2.5rem] break-all leading-tight ${numColor}`}>
+        {displayValue}
+      </motion.div>
 
       {trend !== undefined && trend !== null && (
         <div className="relative mt-3 md:mt-4 flex items-center gap-1.5 text-xs md:text-sm">

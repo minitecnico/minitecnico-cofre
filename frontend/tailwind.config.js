@@ -34,6 +34,21 @@ export default {
         positive: '#10b981', // verde mais suave
         negative: '#ef4444', // vermelho mais suave
         warn:     '#f59e0b',
+
+        // Tokens "Revolut-like" (aplicados na linguagem visual, mas
+        // SEM trocar a identidade de cores: accent verde-limão continua
+        // sendo o stamp da marca, no lugar do cobalto violeta do Revolut).
+        surface: {
+          soft:     '#f4f4f5',  // off-white pra pills suaves e tiles
+          card:     '#ffffff',  // card puro
+          deep:     '#09090b',  // dark canvas (matches ink-950)
+          elevated: '#1c1c1f',  // surface luminosa dentro do dark
+        },
+        hairline: {
+          light:  '#e4e4e7',                  // 1px divider light
+          dark:   'rgba(255,255,255,0.12)',   // 1px divider dark
+          strong: '#18181b',                  // hairline cheio
+        },
       },
       backgroundImage: {
         // Gradientes prontos para uso em cards, botões, fundos
@@ -58,6 +73,17 @@ export default {
         'xl':  '0.875rem',
         '2xl': '1.25rem',
         '3xl': '1.75rem',
+      },
+      spacing: {
+        // Tokens editoriais (Revolut-like) — para hero bands e secções largas
+        'block':   '5rem',   // 80px
+        'section': '5.5rem', // 88px
+        'band':    '7.5rem', // 120px
+      },
+      letterSpacing: {
+        // Tracking apertado p/ headlines display (vibe editorial)
+        'display':       '-0.025em',
+        'display-tight': '-0.04em',
       },
       animation: {
         'slide-up':    'slideUp 0.5s ease-out',

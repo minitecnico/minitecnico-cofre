@@ -29,6 +29,8 @@ export const transactionService = {
     if (filters.type) query = query.eq('type', filters.type);
     if (filters.categoryId) query = query.eq('category_id', filters.categoryId);
     if (filters.creditCardId) query = query.eq('credit_card_id', filters.creditCardId);
+    if (filters.recurringId) query = query.eq('recurring_id', filters.recurringId);
+    if (filters.installmentGroupId) query = query.eq('installment_group_id', filters.installmentGroupId);
     if (filters.startDate) query = query.gte('date', filters.startDate);
     if (filters.endDate) query = query.lte('date', filters.endDate);
 
@@ -91,16 +93,22 @@ export const transactionService = {
   },
 
   async update(id, payload) {
+    // Constrói o patch só com campos definidos no payload — permite atualizar
+    // só `notes` (ex: anotar amortização) ou só `amount`, sem precisar
+    // re-enviar tudo. Campos undefined ficam de fora.
+    const patch = {};
+    if (payload.type !== undefined) patch.type = payload.type;
+    if (payload.amount !== undefined) patch.amount = payload.amount;
+    if (payload.description !== undefined) patch.description = payload.description;
+    if (payload.date !== undefined) patch.date = payload.date;
+    if (payload.category_id !== undefined) patch.category_id = payload.category_id;
+    if (payload.credit_card_id !== undefined) patch.credit_card_id = payload.credit_card_id || null;
+    if (payload.notes !== undefined) patch.notes = payload.notes;
+    if (payload.paid !== undefined) patch.paid = payload.paid;
+
     const { data, error } = await supabase
       .from('transactions')
-      .update({
-        type: payload.type,
-        amount: payload.amount,
-        description: payload.description,
-        date: payload.date,
-        category_id: payload.category_id,
-        credit_card_id: payload.credit_card_id || null,
-      })
+      .update(patch)
       .eq('id', id)
       .select(`*, category:categories(*), credit_card:credit_cards(*)`)
       .single();
@@ -435,6 +443,33 @@ export const recurringService = {
   },
 
   /**
+   * Exclui vários modelos numa única request via `.in('id', ids)`.
+   * Retorna a quantidade afetada (ou ids.length como fallback).
+   */
+  async removeMany(ids) {
+    if (!ids || ids.length === 0) return 0;
+    const { error, count } = await supabase
+      .from('recurring_transactions')
+      .delete({ count: 'exact' })
+      .in('id', ids);
+    if (error) throw error;
+    return count ?? ids.length;
+  },
+
+  /**
+   * Atualiza o campo `active` de vários modelos em uma só chamada.
+   */
+  async setActiveMany(ids, active) {
+    if (!ids || ids.length === 0) return 0;
+    const { error, count } = await supabase
+      .from('recurring_transactions')
+      .update({ active }, { count: 'exact' })
+      .in('id', ids);
+    if (error) throw error;
+    return count ?? ids.length;
+  },
+
+  /**
    * Gera as transações recorrentes do mês informado.
    * Idempotente: se já tiverem sido geradas, não duplica.
    * Retorna quantas foram criadas (0 = nada novo).
@@ -443,6 +478,82 @@ export const recurringService = {
     const { data, error } = await supabase.rpc('generate_recurring_for_month', { p_month: month });
     if (error) throw error;
     return data || 0;
+  },
+};
+
+/**
+ * LoanService — empréstimos vigentes.
+ * --------------------------------------------------------------
+ * Empréstimo no Cofre = compra parcelada com `installment_total >= 36`
+ * (≥ 3 anos). Não vive em `recurring_transactions` — são N parcelas em
+ * `transactions` ligadas por `installment_group_id`. Esse service agrupa
+ * essas parcelas pra mostrar o estado consolidado de cada empréstimo.
+ */
+export const loanService = {
+  /**
+   * Lista empréstimos vigentes (ainda têm parcelas não pagas).
+   * Agrupa por installment_group_id e calcula totais.
+   */
+  async list() {
+    // Threshold do que o Cofre considera "empréstimo" (vs parcelamento normal)
+    const LOAN_THRESHOLD = 36;
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .select(`
+        id, description, amount, date, paid,
+        installment_number, installment_total, installment_group_id,
+        category:categories ( id, name, color ),
+        credit_card:credit_cards ( id, name, color )
+      `)
+      .gte('installment_total', LOAN_THRESHOLD)
+      .not('installment_group_id', 'is', null)
+      .order('date', { ascending: true });
+
+    if (error) throw error;
+
+    // Agrupa por installment_group_id
+    const groups = new Map();
+    for (const tx of (data || [])) {
+      const gid = tx.installment_group_id;
+      if (!groups.has(gid)) {
+        groups.set(gid, {
+          groupId: gid,
+          // pega descrição "limpa" tirando o " (X/N)" do final
+          description: (tx.description || '').replace(/\s*\(\d+\/\d+\)\s*$/, ''),
+          total: 0,
+          paid: 0,
+          unpaid: 0,
+          parcels: [],
+          firstDate: tx.date,
+          installmentTotal: tx.installment_total,
+          category: tx.category,
+          creditCard: tx.credit_card,
+        });
+      }
+      const g = groups.get(gid);
+      const amount = Number(tx.amount) || 0;
+      g.total += amount;
+      if (tx.paid) g.paid += amount;
+      else g.unpaid += amount;
+      g.parcels.push(tx);
+    }
+
+    // Só mantém os que ainda têm parcelas não pagas (vigentes)
+    return Array.from(groups.values())
+      .filter((g) => g.unpaid > 0)
+      .map((g) => {
+        const paidCount = g.parcels.filter((p) => p.paid).length;
+        return {
+          ...g,
+          paidCount,
+          remainingCount: g.installmentTotal - paidCount,
+          // valor médio da parcela
+          installmentValue: g.total / g.installmentTotal,
+          progressPercent: Math.round((paidCount / g.installmentTotal) * 100),
+        };
+      })
+      .sort((a, b) => a.firstDate.localeCompare(b.firstDate));
   },
 };
 

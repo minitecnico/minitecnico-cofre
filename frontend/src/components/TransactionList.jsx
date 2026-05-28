@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Pencil, Trash2, CreditCard as CardIcon, Check, Repeat, Layers } from 'lucide-react';
-import { formatCurrency, formatDate } from '../utils/format';
+import { Pencil, Trash2, CreditCard as CardIcon, Check, Repeat, Layers, Percent } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { formatCurrency, formatDate, parseAmortization } from '../utils/format';
 import Modal from './Modal';
 import TransactionForm from './TransactionForm';
 import { transactionService } from '../services';
@@ -69,17 +70,24 @@ export default function TransactionList({
   return (
     <>
       <div className="bg-white border-2 border-ink-900 shadow-flat-sm md:shadow-flat divide-y-2 divide-ink-100">
-        {items.map((t) => {
+        <AnimatePresence initial={false}>
+        {items.map((t, index) => {
           const isIncome = t.type === 'income';
           const isExpense = !isIncome;
           const isPaid = !!t.paid;
           const cat = t.category || {};
           const card = t.credit_card || null;
           const isInstallment = !!t.installment_group_id && t.installment_total > 1;
+          const amortization = parseAmortization(t.notes);
 
           return (
-            <div
+            <motion.div
               key={t.id}
+              layout
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, x: -100 }}
+              transition={{ delay: index * 0.04 }}
               className={`group flex items-stretch transition-all hover:bg-ink-50 ${
                 isExpense && isPaid ? 'opacity-60' : ''
               }`}
@@ -156,12 +164,35 @@ export default function TransactionList({
                     )}
                   </div>
                   <div className="flex items-center gap-2 text-xs text-ink-500 flex-wrap">
-                    <span className="font-medium" style={{ color: cat.color }}>
-                      {cat.name}
-                    </span>
+                    {cat.name ? (
+                      <span className="font-medium" style={{ color: cat.color || '#71717a' }}>
+                        {cat.name}
+                      </span>
+                    ) : (
+                      <span className="font-medium italic text-ink-400">Sem categoria</span>
+                    )}
                     <span>·</span>
                     <span>{formatDate(t.date, 'long')}</span>
                   </div>
+
+                  {/* Badge de amortização: original riscado → pago + desconto% */}
+                  {amortization && (
+                    <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent/15 border border-accent/40 text-[11px] font-semibold w-fit max-w-full"
+                      title={amortization.date ? `Amortizado em ${amortization.date}` : 'Amortizado'}
+                    >
+                      <Percent className="w-3 h-3 text-positive flex-shrink-0" strokeWidth={2.5} />
+                      <span className="font-mono text-ink-500 line-through whitespace-nowrap">
+                        {formatCurrency(amortization.original)}
+                      </span>
+                      <span className="text-ink-400">→</span>
+                      <span className="font-mono text-ink-900 whitespace-nowrap">
+                        {formatCurrency(amortization.paid)}
+                      </span>
+                      <span className="text-positive whitespace-nowrap">
+                        −{amortization.percent.toFixed(1).replace('.', ',')}%
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between md:justify-end gap-2 md:gap-4 mt-1 md:mt-0">
@@ -191,9 +222,10 @@ export default function TransactionList({
                   </div>
                 </div>
               </div>
-            </div>
+            </motion.div>
           );
         })}
+        </AnimatePresence>
       </div>
 
       <Modal isOpen={!!editing} onClose={() => setEditing(null)} title="Editar transação">
